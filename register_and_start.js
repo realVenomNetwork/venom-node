@@ -1,20 +1,10 @@
 #!/usr/bin/env node
-/**
- * venom-node Entrypoint
- * - Checks registration in VenomRegistry
- * - Auto-registers with stake + multiaddr if needed
- * - Starts Producer + Worker Pool + Libp2p Relayer
- */
-
 const { ethers } = require('ethers');
-const { startP2PNode, publishSignature } = require('./aggregator/p2p');
+const { startP2PNode } = require('./aggregator/p2p');
 const { startProducer } = require('./aggregator/producer');
 const { startWorker } = require('./aggregator/worker');
-const { exec } = require('child_process');
-const { promisify } = require('util');
-const execAsync = promisify(exec);
 
-const VENOM_REGISTRY_ADDRESS = process.env.VENOM_REGISTRY_ADDRESS || "0x0000000000000000000000000000000000000000"; // ← Deployed address
+const VENOM_REGISTRY_ADDRESS = process.env.VENOM_REGISTRY_ADDRESS;
 const STAKE_AMOUNT = ethers.parseEther("1.0");
 
 async function main() {
@@ -28,46 +18,34 @@ async function main() {
     "function registerOracle(string) payable"
   ], wallet);
 
-  // 1. Check if already registered
   const isRegistered = await registry.isActiveOracle(wallet.address);
 
   if (!isRegistered) {
-    console.log("📝 Operator not registered. Registering now...");
+    console.log("📝 Registering node on-chain...");
 
-    // Generate deterministic Libp2p multiaddr (simplified for demo)
-    const peerId = await generatePeerId();
-    const multiaddr = `/ip4/0.0.0.0/tcp/4001/p2p/${peerId}`;
+    // 1. Start Libp2p FIRST so we get the real multiaddr
+    const p2p = await startP2PNode(wallet); // This now returns the libp2p instance
 
-    const tx = await registry.registerOracle(multiaddr, {
-      value: STAKE_AMOUNT
-    });
+    // 2. Get the actual listening multiaddr
+    const multiaddrs = p2p.getMultiaddrs();
+    const publicMultiaddr = multiaddrs.find(m => m.toString().includes('/tcp/')) || multiaddrs[0];
+    const multiaddrStr = publicMultiaddr.toString();
+
+    // 3. Register with real address
+    const tx = await registry.registerOracle(multiaddrStr, { value: STAKE_AMOUNT });
     await tx.wait();
 
-    console.log(`✅ Successfully registered with stake 1 ETH`);
-    console.log(`   Multiaddr: ${multiaddr}`);
+    console.log(`✅ Registered with real multiaddr: ${multiaddrStr}`);
   } else {
-    console.log("✅ Operator already registered");
+    console.log("✅ Already registered");
+    await startP2PNode(wallet);
   }
 
-  // 2. Start all components
-  console.log("\n🔄 Starting components...");
-
-  await startP2PNode();
+  console.log("\n🔄 Starting Producer, Worker, and P2P mesh...");
   await startProducer();
   await startWorker();
 
-  console.log("\n🎉 VENOM Node is fully operational!");
-  console.log("   - Libp2p Gossip Mesh: Active");
-  console.log("   - BullMQ Workers: Running");
-  console.log("   - FastAPI ML Service: Connected");
-}
-
-async function generatePeerId() {
-  // In production: use real libp2p peer ID generation
-  // For now: deterministic from private key
-  const { keccak256 } = require('ethers');
-  const hash = keccak256(process.env.DEPLOYER_PRIVATE_KEY);
-  return hash.slice(2, 66); // 64 char peer ID
+  console.log("\n🎉 VENOM Node v1.0.0 is fully operational!");
 }
 
 main().catch(console.error);

@@ -15,32 +15,30 @@ const TOPIC = 'venom:signatures';
 let libp2p;
 let pendingCampaigns = new Map();
 let myPeerId;
+let myWallet; // Will be set from register_and_start.js
 
-async function startP2PNode() {
+async function startP2PNode(wallet) {
+  myWallet = wallet; // Store for later use in submitAggregatedTransaction
+
   const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
   const registry = new ethers.Contract(VENOM_REGISTRY_ADDRESS, [
     "function getActiveOracles() view returns (address[] operators, string[] multiaddrs)"
   ], provider);
 
-  // 1. Get active oracles + multiaddrs from chain
   const [operators, multiaddrs] = await registry.getActiveOracles();
   console.log(`[P2P] Found ${operators.length} active oracles on-chain`);
 
-  // 2. Create Libp2p node
   libp2p = await createLibp2p({
     addresses: { listen: ['/ip4/0.0.0.0/tcp/0'] },
     transports: [tcp()],
     connectionEncryption: [noise()],
     streamMuxers: [mplex()],
-    services: {
-      pubsub: gossipsub({ allowPublishToZeroPeers: true })
-    }
+    services: { pubsub: gossipsub({ allowPublishToZeroPeers: true }) }
   });
 
   myPeerId = libp2p.peerId.toString();
   console.log(`🚀 VENOM P2P Node started: ${myPeerId}`);
 
-  // 3. Dynamically bootstrap from on-chain multiaddrs
   for (const addr of multiaddrs) {
     if (addr && addr.length > 0) {
       try {
@@ -52,12 +50,13 @@ async function startP2PNode() {
     }
   }
 
-  // 4. Subscribe and handle messages
   await libp2p.services.pubsub.subscribe(TOPIC);
   libp2p.services.pubsub.addEventListener('message', handleSignatureMessage);
 
   setInterval(checkAndSubmitIfLeader, 5000);
   console.log("[P2P] Fully decentralized node ready");
+  
+  return libp2p;
 }
 
 async function handleSignatureMessage(evt) {
@@ -81,7 +80,7 @@ async function handleSignatureMessage(evt) {
 
     // Check if we are the leader and have enough signatures
     if (entry.signers.length >= REQUIRED_ORACLES) {
-      const isLeader = await isLeaderForCampaign(campaignUid, entry.signers.length);
+      const isLeader = await isLeaderForCampaign(campaignUid);
       if (isLeader) {
         await submitAggregatedTransaction(campaignUid, entry);
         pendingCampaigns.delete(campaignUid);
@@ -92,31 +91,24 @@ async function handleSignatureMessage(evt) {
   }
 }
 
-async function isLeaderForCampaign(campaignUid, totalSignatures) {
-  // Deterministic leader election: campaignUid % activeOraclesCount == my index
-  // Note: activeOracles is simplified here. In production, maintain active oracles state from chain.
-  const activeCount = Math.max(1, 5); 
+async function isLeaderForCampaign(campaignUid) {
+  // Simplified for v1.0.0 — in v1.1 we will make this dynamic
+  const activeCount = 5;
   const campaignBigInt = BigInt(campaignUid);
-  // Simplified myIndex
-  const myIndex = 0; 
-
-  return (campaignBigInt % BigInt(activeCount)) === BigInt(myIndex);
+  return Number(campaignBigInt % BigInt(activeCount)) === 0; // First in list wins
 }
 
 async function submitAggregatedTransaction(campaignUid, entry) {
   try {
-    const recipient = "0x58b2bDA90E74BfAF25B9071eD118a959e1585D54";
+    const recipient = myWallet.address; // ← FIXED: bounty goes to the operator who submits
     const bounty = ethers.parseEther("0.001");
     const payloadNonce = 0;
 
     console.log(`[P2P] Submitting aggregated tx for ${campaignUid} with ${entry.signers.length} signatures...`);
 
-    const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-    const wallet = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, provider);
-
     const pilotEscrow = new ethers.Contract(PILOT_ESCROW_ADDRESS, [
       "function closeCampaign(bytes32,address,uint256,uint256,uint256[],bytes[]) external"
-    ], wallet);
+    ], myWallet);
 
     const tx = await pilotEscrow.closeCampaign(
       campaignUid,
@@ -128,7 +120,7 @@ async function submitAggregatedTransaction(campaignUid, entry) {
     );
 
     const receipt = await tx.wait();
-    console.log(`✅ SUCCESS: Campaign closed in block ${receipt.blockNumber}`);
+    console.log(`✅ SUCCESS: Campaign closed in block ${receipt.blockNumber} — bounty sent to ${recipient}`);
   } catch (err) {
     console.error(`❌ Submission failed for ${campaignUid}:`, err.message);
   }
@@ -139,9 +131,6 @@ async function publishSignature(campaignUid, score, signature) {
   await libp2p.services.pubsub.publish(TOPIC, new TextEncoder().encode(JSON.stringify(message)));
 }
 
-async function checkAndSubmitIfLeader() {
-  // Same leader election logic as previous version
-  // ...
-}
+async function checkAndSubmitIfLeader() { /* unchanged */ }
 
 module.exports = { startP2PNode, publishSignature };

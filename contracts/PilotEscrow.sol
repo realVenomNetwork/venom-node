@@ -47,7 +47,6 @@ contract PilotEscrow {
         require(!campaign.closed, "Already closed");
         require(campaign.balance >= bounty, "Insufficient balance");
 
-        // 1. Verify signatures and collect valid scores
         uint256[] memory validScores = new uint256[](scores.length);
         uint256 validCount = 0;
 
@@ -61,25 +60,23 @@ contract PilotEscrow {
 
         require(validCount >= REQUIRED_ORACLES, "Not enough valid oracles");
 
-        // 2. Calculate median
         uint256 medianScore = _calculateMedian(validScores, validCount);
 
-        // 3. Check threshold
         require(medianScore >= PASS_THRESHOLD, "Median below threshold");
 
-        // 4. Report deviations for slashing (optional but recommended)
+        // === ACTUAL SLASHING ENFORCEMENT ===
         for (uint256 i = 0; i < validCount; i++) {
             uint256 deviation = validScores[i] > medianScore 
                 ? validScores[i] - medianScore 
                 : medianScore - validScores[i];
             
-            if (deviation > 25) { // 0.25 deviation
-                // We would need the original signer address here in a real implementation
-                // For now we skip actual slashing call (can be added later)
+            if (deviation > 25) {
+                // Recover signer again for slashing
+                address signer = _recoverSigner(campaignUid, validScores[i], signatures[i]);
+                registry.reportDeviation(signer, validScores[i], medianScore);
             }
         }
 
-        // 5. Execute close
         campaign.closed = true;
         campaign.balance -= bounty;
         payable(recipient).transfer(bounty);

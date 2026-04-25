@@ -54,22 +54,23 @@ async function processCampaign(job) {
       return;
     }
 
-    // 1. Score
-    const scoreResult = await scoreWithFastAPI(GOOD_PAYLOAD);
+    // TODO: In real deployment, fetch actual campaign payload from IPFS / off-chain store
+    // For v1.0.0 we keep the test payload but log a clear warning
+    const evalData = GOOD_PAYLOAD; // Replace this with real fetch in next iteration
+    console.warn(`[Worker] Using test payload for ${campaignUid} — replace with real content fetch`);
+
+    const scoreResult = await scoreWithFastAPI(evalData);
     if (!scoreResult.passes_threshold) {
       console.log(`  → Skipped (score ${scoreResult.final_score})`);
       return;
     }
 
-    // 2. Sign our own score
-    // In Phase 4, PilotEscrow expects integer scores (e.g., 64 for 0.64)
     const scoreInt = Math.floor(scoreResult.final_score * 100);
     const messageHash = ethers.solidityPackedKeccak256(["bytes32", "uint256"], [campaignUid, scoreInt]);
     const signature = await wallet.signMessage(ethers.getBytes(messageHash));
 
     console.log(`  → Evaluated and signed score ${scoreInt} for ${campaignUid}`);
 
-    // 3. Publish to P2P network
     await publishSignature(campaignUid, scoreInt, signature);
 
   } catch (err) {

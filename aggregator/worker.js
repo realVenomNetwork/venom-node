@@ -10,7 +10,7 @@ const rootEnvPath = path.join(__dirname, "../.env");
 require("dotenv").config({ path: rootEnvPath, quiet: true });
 
 const PILOT_ESCROW_ADDRESS = process.env.PILOT_ESCROW_ADDRESS;
-const ML_SERVICE_URL = "http://127.0.0.1:8000/evaluate";
+const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://127.0.0.1:8000/evaluate";
 
 // === MULTI-RPC PROVIDER ===
 const rpcUrls = (process.env.RPC_URLS || process.env.RPC_URL || "https://base-sepolia-rpc.publicnode.com").split(",").map(u => u.trim());

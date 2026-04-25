@@ -2,17 +2,18 @@
   "_format": "hh-sol-cache-2",
   "files": {
     "C:\\Users\\mjisa\\dev\\venom-node\\contracts\\PilotEscrow.sol": {
-      "lastModificationDate": 1777120320233,
-      "contentHash": "6e9258d278bf657b5b5822c41490fb0a",
+      "lastModificationDate": 1777127763169,
+      "contentHash": "d8889a76d046093b27ab687c04b78ddd",
       "sourceName": "contracts/PilotEscrow.sol",
       "solcConfig": {
         "version": "0.8.20",
         "settings": {
-          "evmVersion": "paris",
           "optimizer": {
-            "enabled": false,
+            "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
+          "evmVersion": "paris",
           "outputSelection": {
             "*": {
               "*": [
@@ -41,17 +42,18 @@
       ]
     },
     "C:\\Users\\mjisa\\dev\\venom-node\\contracts\\VenomRegistry.sol": {
-      "lastModificationDate": 1777120320233,
-      "contentHash": "4c998d144358671a34d0c141fcbdded9",
+      "lastModificationDate": 1777127763169,
+      "contentHash": "be458c27c9a9405b7eb851d8070e960a",
       "sourceName": "contracts/VenomRegistry.sol",
       "solcConfig": {
         "version": "0.8.20",
         "settings": {
-          "evmVersion": "paris",
           "optimizer": {
-            "enabled": false,
+            "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
+          "evmVersion": "paris",
           "outputSelection": {
             "*": {
               "*": [
@@ -79,17 +81,18 @@
       ]
     },
     "C:\\Users\\mjisa\\dev\\venom-node\\node_modules\\@openzeppelin\\contracts\\access\\Ownable.sol": {
-      "lastModificationDate": 1777121112987,
+      "lastModificationDate": 1777127866211,
       "contentHash": "d3c790edc9ccf808a17c5a6cd13614fd",
       "sourceName": "@openzeppelin/contracts/access/Ownable.sol",
       "solcConfig": {
         "version": "0.8.20",
         "settings": {
-          "evmVersion": "paris",
           "optimizer": {
-            "enabled": false,
+            "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
+          "evmVersion": "paris",
           "outputSelection": {
             "*": {
               "*": [
@@ -117,17 +120,18 @@
       ]
     },
     "C:\\Users\\mjisa\\dev\\venom-node\\node_modules\\@openzeppelin\\contracts\\utils\\Context.sol": {
-      "lastModificationDate": 1777121111820,
+      "lastModificationDate": 1777127865960,
       "contentHash": "67bfbc07588eb8683b3fd8f6f909563e",
       "sourceName": "@openzeppelin/contracts/utils/Context.sol",
       "solcConfig": {
         "version": "0.8.20",
         "settings": {
-          "evmVersion": "paris",
           "optimizer": {
-            "enabled": false,
+            "enabled": true,
             "runs": 200
           },
+          "viaIR": true,
+          "evmVersion": "paris",
           "outputSelection": {
             "*": {
               "*": [

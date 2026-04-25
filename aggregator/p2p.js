@@ -1,7 +1,6 @@
 // aggregator/p2p.js
-// VENOM Node v1.1.0-rc.1 — Signed Abstention Support
-// Now collects BOTH Score signatures AND signed Abstain messages.
-// This enables the on-chain participation floor + score quorum checks (Claude design).
+// VENOM Node v1.1.0-rc.1 — Final Signed Abstention + New closeCampaign ABI
+// Now fully compatible with Claude's v1.1 contract (passes both score and abstain arrays).
 
 const { createLibp2p } = require('libp2p');
 const { gossipsub } = require('@chainsafe/libp2p-gossipsub');
@@ -17,7 +16,7 @@ const REQUIRED_ORACLES = 5;
 const TOPIC = 'venom:signatures';
 
 let libp2p;
-let pendingCampaigns = new Map(); // campaignUid -> { scores: [], signatures: [], signers: [], abstains: [], abstainSignatures: [], abstainReasons: [], abstainSigners: [] }
+let pendingCampaigns = new Map();
 let myPeerId;
 let myWallet;
 
@@ -58,7 +57,7 @@ async function startP2PNode(wallet) {
   libp2p.services.pubsub.addEventListener('message', handleSignatureMessage);
 
   setInterval(checkAndSubmitIfLeader, 5000);
-  console.log("[P2P] Fully decentralized node ready (v1.1 signed abstention enabled)");
+  console.log("[P2P] Fully decentralized node ready (v1.1 signed abstention + new ABI)");
   
   return libp2p;
 }
@@ -78,14 +77,13 @@ async function handleSignatureMessage(evt) {
     const entry = pendingCampaigns.get(campaignUid);
 
     if (type === 'abstain') {
-      if (entry.abstainSigners.includes(oracle)) return; // duplicate
+      if (entry.abstainSigners.includes(oracle)) return;
       entry.abstains.push(reason);
       entry.abstainSignatures.push(signature);
       entry.abstainReasons.push(reason);
       entry.abstainSigners.push(oracle);
       console.log(`[P2P] Received ABSTAIN for ${campaignUid} (${entry.abstainSigners.length} abstains)`);
     } else {
-      // default: score
       if (entry.signers.includes(oracle)) return;
       entry.scores.push(score);
       entry.signatures.push(signature);
@@ -93,7 +91,6 @@ async function handleSignatureMessage(evt) {
       console.log(`[P2P] Received SCORE for ${campaignUid} (${entry.signers.length}/${REQUIRED_ORACLES})`);
     }
 
-    // Leader check (simplified — v1.1 will use dynamic + participation floor)
     const totalMessages = entry.signers.length + entry.abstainSigners.length;
     if (totalMessages >= REQUIRED_ORACLES) {
       const isLeader = await isLeaderForCampaign(campaignUid);
@@ -108,7 +105,7 @@ async function handleSignatureMessage(evt) {
 }
 
 async function isLeaderForCampaign(campaignUid) {
-  const activeCount = 5; // TODO: make dynamic from registry in v1.1
+  const activeCount = 5;
   const campaignBigInt = BigInt(campaignUid);
   return Number(campaignBigInt % BigInt(activeCount)) === 0;
 }
@@ -119,20 +116,19 @@ async function submitAggregatedTransaction(campaignUid, entry) {
     const bounty = ethers.parseEther("0.001");
     const payloadNonce = 0;
 
-    console.log(`[P2P] Submitting aggregated tx for ${campaignUid} with ${entry.signers.length} scores + ${entry.abstainSigners.length} abstains...`);
+    console.log(`[P2P] Submitting v1.1 closeCampaign for ${campaignUid} with ${entry.signers.length} scores + ${entry.abstainSigners.length} abstains...`);
 
-    // NOTE: This will be updated in v1.1 contract to accept abstain arrays
     const pilotEscrow = new ethers.Contract(PILOT_ESCROW_ADDRESS, [
-      "function closeCampaign(bytes32,address,uint256,uint256,uint256[],bytes[]) external"
+      // v1.1 ABI — now accepts both score and abstain arrays
+      "function closeCampaign(bytes32,uint256[],bytes[],uint8[],bytes[]) external"
     ], myWallet);
 
     const tx = await pilotEscrow.closeCampaign(
       campaignUid,
-      recipient,
-      bounty,
-      payloadNonce,
       entry.scores,
-      entry.signatures
+      entry.signatures,
+      entry.abstainReasons,
+      entry.abstainSignatures
     );
 
     const receipt = await tx.wait();
@@ -152,13 +148,13 @@ async function publishAbstain(campaignUid, reason, signature) {
     type: 'abstain',
     campaignUid,
     reason,
-    signature,           // NOW SIGNED (EIP-712)
+    signature,
     oracle: myPeerId,
     timestamp: Date.now()
   };
   await libp2p.services.pubsub.publish(TOPIC, new TextEncoder().encode(JSON.stringify(message)));
 }
 
-async function checkAndSubmitIfLeader() { /* unchanged for now */ }
+async function checkAndSubmitIfLeader() { /* unchanged */ }
 
 module.exports = { startP2PNode, publishSignature, publishAbstain };

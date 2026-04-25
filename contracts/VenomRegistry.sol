@@ -18,7 +18,7 @@ contract VenomRegistry is Ownable {
     address public pilotEscrow;
 
     uint256 public constant MIN_STAKE = 1 ether;
-    uint256 public constant SLASH_PERCENT = 25;
+    uint256 public constant SLASH_PERCENT = 5; // Reduced for rc.1
     uint256 public constant MAX_DEVIATION = 25;
 
     event OracleRegistered(address indexed operator, uint256 stake, string multiaddr);
@@ -60,7 +60,7 @@ contract VenomRegistry is Ownable {
         external
         onlyPilotEscrow
     {
-        require(oracles[operator].active, "Not active");
+        if (!oracles[operator].active) return; // Gracefully ignore already slashed
 
         uint256 deviation = submittedScore > medianScore
             ? submittedScore - medianScore
@@ -98,5 +98,12 @@ contract VenomRegistry is Ownable {
 
     function isActiveOracle(address operator) external view returns (bool) {
         return oracles[operator].active;
+    }
+
+    /// @notice Returns the count of currently active oracles. O(n) but cheap for view calls.
+    function activeOracleCount() external view returns (uint256 count) {
+        for (uint256 i = 0; i < oracleList.length; i++) {
+            if (oracles[oracleList[i]].active) count++;
+        }
     }
 }

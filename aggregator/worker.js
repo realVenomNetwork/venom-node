@@ -1,4 +1,10 @@
 // aggregator/worker.js
+// VENOM Node v1.1.0-rc.1 — Corrected IPFS Fetch + Signed Abstention
+// Fixes: 
+// - Gateway fallback now correctly continues on NotFound/FetchFailed/Timeout (Claude feedback)
+// - Payload can be raw text or JSON {payload, reference_answer}
+// - Abstention is now properly EIP-712 signed before publishing
+
 const { Worker } = require('bullmq');
 const { connection, QUEUE_NAME } = require('./queue');
 const { ethers } = require('ethers');
@@ -31,15 +37,26 @@ const PilotEscrowABI = [
 
 const pilotEscrow = new ethers.Contract(PILOT_ESCROW_ADDRESS, PilotEscrowABI, wallet);
 
-// High-quality payload
+// High-quality test payload (used when USE_TEST_PAYLOAD=true or no CID)
 const GOOD_PAYLOAD = {
   payload: "**Arguments For Allocating 15% ($360,000):**\n- Strengthens the DAO's public goods reputation and attracts mission-aligned contributors.\n- Creates measurable positive externalities that benefit the broader ecosystem.\n- Provides a clear, time-boxed experiment with defined success metrics.\n\n**Arguments Against Allocating 15% ($360,000):**\n- Reduces the treasury's runway from approximately 4.2 years to 3.6 years, increasing long-term financial risk.\n- Opportunity cost: the same capital could be deployed into yield-bearing strategies.\n- Governance overhead increases as the DAO must design, run, and monitor a new funding process.\n\n**Recommendation:**\nThe DAO should proceed with a **reduced allocation of 8–10%** ($192,000–$240,000) for the first round.",
   reference_answer: "The DAO should carefully weigh the pros and cons of the $2.4M treasury. Pros include strengthening reputation and attracting talent. Cons include reducing the runway and missing out on yield-bearing opportunities."
 };
 
+// EIP-712 for Abstain (must match future contract ABSTAIN_TYPEHASH)
+const ABSTAIN_TYPEHASH = ethers.keccak256(ethers.toUtf8Bytes("Abstain(bytes32 campaignUid,uint8 reason)"));
+const DOMAIN = {
+  name: "VENOM PilotEscrow",
+  version: "1",
+  chainId: null, // set dynamically
+  verifyingContract: PILOT_ESCROW_ADDRESS,
+};
+
 async function fetchFromIpfs(cid) {
   if (!IPFS_GATEWAYS.length) throw new Error("No IPFS gateways configured.");
-  
+
+  const failures = [];
+
   for (const gateway of IPFS_GATEWAYS) {
     const url = `${gateway}/${cid}`;
     const controller = new AbortController();
@@ -48,15 +65,19 @@ async function fetchFromIpfs(cid) {
     try {
       const response = await fetch(url, { signal: controller.signal });
       clearTimeout(timeout);
-      
+
       if (!response.ok) {
-        if (response.status === 404) throw new Error("NotFound");
-        throw new Error("FetchFailed");
+        if (response.status === 404) {
+          failures.push("NotFound");
+          continue; // try next gateway
+        }
+        failures.push("FetchFailed");
+        continue;
       }
 
       const contentLength = response.headers.get("content-length");
       if (contentLength && parseInt(contentLength, 10) > MAX_PAYLOAD_BYTES) {
-        throw new Error("PayloadTooLarge");
+        throw new Error("PayloadTooLarge"); // immediate fail, no point trying other gateways
       }
 
       const text = await response.text();
@@ -64,21 +85,32 @@ async function fetchFromIpfs(cid) {
         throw new Error("PayloadTooLarge");
       }
 
-      const data = JSON.parse(text);
+      // Support both JSON and raw text payloads
+      let data;
+      try {
+        data = JSON.parse(text);
+        if (!data.payload) data = { payload: text, reference_answer: "" };
+      } catch {
+        data = { payload: text, reference_answer: "" };
+      }
       return data;
+
     } catch (err) {
       clearTimeout(timeout);
-      if (err.name === "AbortError" || err.message === "TimeoutError") {
-        console.warn(`[Worker] Gateway ${gateway} timed out.`);
+      if (err.message === "PayloadTooLarge") throw err; // immediate
+      if (err.name === "AbortError") {
+        failures.push("Timeout");
         continue;
       }
-      if (["NotFound", "PayloadTooLarge", "FetchFailed"].includes(err.message)) {
-        throw err;
-      }
-      console.warn(`[Worker] Gateway ${gateway} failed: ${err.message}`);
+      failures.push("FetchFailed");
     }
   }
-  throw new Error("Timeout");
+
+  // All gateways exhausted — pick most common failure reason
+  const reasonCounts = {};
+  failures.forEach(r => reasonCounts[r] = (reasonCounts[r] || 0) + 1);
+  const mostCommon = Object.keys(reasonCounts).reduce((a, b) => reasonCounts[a] > reasonCounts[b] ? a : b, "FetchFailed");
+  throw new Error(mostCommon);
 }
 
 async function scoreWithFastAPI(evalData) {
@@ -110,8 +142,22 @@ async function processCampaign(job) {
         evalData = await fetchFromIpfs(cid);
       } catch (e) {
         const reason = ["Timeout", "PayloadTooLarge", "FetchFailed", "NotFound", "HashMismatch"].includes(e.message) ? e.message : "FetchFailed";
-        console.log(`  → Fetch failed (${reason}). Publishing abstain.`);
-        await publishAbstain(campaignUid, reason);
+        console.log(`  → Fetch failed (${reason}). Publishing signed abstain.`);
+
+        // === SIGNED ABSTENTION (EIP-712) ===
+        const chainId = (await provider.getNetwork()).chainId;
+        const domain = { ...DOMAIN, chainId };
+        const types = {
+          Abstain: [
+            { name: "campaignUid", type: "bytes32" },
+            { name: "reason", type: "uint8" }
+          ]
+        };
+        const reasonCode = ["Timeout","PayloadTooLarge","FetchFailed","NotFound","HashMismatch"].indexOf(reason) + 1 || 1;
+        const value = { campaignUid, reason: reasonCode };
+        const signature = await wallet.signTypedData(domain, types, value);
+
+        await publishAbstain(campaignUid, reason, signature);
         return;
       }
     }
@@ -123,12 +169,8 @@ async function processCampaign(job) {
     }
 
     const scoreInt = Math.floor(scoreResult.final_score * 100);
-    const domain = {
-      name: "VENOM PilotEscrow",
-      version: "1",
-      chainId: (await provider.getNetwork()).chainId,
-      verifyingContract: PILOT_ESCROW_ADDRESS,
-    };
+    const chainId = (await provider.getNetwork()).chainId;
+    const domain = { ...DOMAIN, chainId };
 
     const types = {
       Score: [
@@ -158,8 +200,8 @@ async function startWorker() {
     concurrency: 4
   });
 
-  console.log("🚀 Starting VENOM Worker (BullMQ + MultiRPC)");
-  console.log(`   Address: ${deployerAddress} | Concurrency: 4\n`);
+  console.log("🚀 Starting VENOM Worker v1.1.0-rc.1 (BullMQ + Signed Abstention + Fixed IPFS Fallback)");
+  console.log(`   Address: ${deployerAddress} | Concurrency: 4 | Gateways: ${IPFS_GATEWAYS.length}\n`);
 
   worker.on('failed', (job, err) => console.error(`Job ${job.id} failed:`, err.message));
 }

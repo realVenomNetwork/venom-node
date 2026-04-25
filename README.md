@@ -5,7 +5,7 @@
 ## Quick Start (One Command)
 
 ```bash
-git clone https://github.com/venom-network/venom-node.git
+git clone https://github.com/realVenomNetwork/venom-node.git
 cd venom-node
 cp .env.example .env
 # Edit .env with your RPC_URL and DEPLOYER_PRIVATE_KEY

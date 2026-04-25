@@ -47,4 +47,4 @@ docker-compose logs -f venom-node
 Running a modified node that approves invalid payloads will result in automatic 25% stake slashing via the on-chain median consensus mechanism. This is by design.
 
 ## Support
-Join the Discord or open an issue on GitHub.
+Join the Discord (not available yet) or open an issue on GitHub.

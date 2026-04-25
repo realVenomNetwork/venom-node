@@ -4,13 +4,16 @@ const { connection, QUEUE_NAME } = require('./queue');
 const { ethers } = require('ethers');
 const path = require('path');
 const MultiRpcProvider = require('../rpc/router');
-const { publishSignature } = require('./p2p');
+const { publishSignature, publishAbstain } = require('./p2p');
 
 const rootEnvPath = path.join(__dirname, "../.env");
 require("dotenv").config({ path: rootEnvPath, quiet: true });
 
 const PILOT_ESCROW_ADDRESS = process.env.PILOT_ESCROW_ADDRESS;
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://127.0.0.1:8000/evaluate";
+const IPFS_GATEWAYS = (process.env.IPFS_GATEWAYS || "").split(",").map(g => g.trim()).filter(Boolean);
+const MAX_PAYLOAD_BYTES = parseInt(process.env.MAX_PAYLOAD_BYTES || "51200", 10);
+const FETCH_TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS || "15000", 10);
 
 // === MULTI-RPC PROVIDER ===
 const rpcUrls = (process.env.RPC_URLS || process.env.RPC_URL || "https://base-sepolia-rpc.publicnode.com").split(",").map(u => u.trim());
@@ -34,6 +37,50 @@ const GOOD_PAYLOAD = {
   reference_answer: "The DAO should carefully weigh the pros and cons of the $2.4M treasury. Pros include strengthening reputation and attracting talent. Cons include reducing the runway and missing out on yield-bearing opportunities."
 };
 
+async function fetchFromIpfs(cid) {
+  if (!IPFS_GATEWAYS.length) throw new Error("No IPFS gateways configured.");
+  
+  for (const gateway of IPFS_GATEWAYS) {
+    const url = `${gateway}/${cid}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+      
+      if (!response.ok) {
+        if (response.status === 404) throw new Error("NotFound");
+        throw new Error("FetchFailed");
+      }
+
+      const contentLength = response.headers.get("content-length");
+      if (contentLength && parseInt(contentLength, 10) > MAX_PAYLOAD_BYTES) {
+        throw new Error("PayloadTooLarge");
+      }
+
+      const text = await response.text();
+      if (Buffer.byteLength(text, 'utf8') > MAX_PAYLOAD_BYTES) {
+        throw new Error("PayloadTooLarge");
+      }
+
+      const data = JSON.parse(text);
+      return data;
+    } catch (err) {
+      clearTimeout(timeout);
+      if (err.name === "AbortError" || err.message === "TimeoutError") {
+        console.warn(`[Worker] Gateway ${gateway} timed out.`);
+        continue;
+      }
+      if (["NotFound", "PayloadTooLarge", "FetchFailed"].includes(err.message)) {
+        throw err;
+      }
+      console.warn(`[Worker] Gateway ${gateway} failed: ${err.message}`);
+    }
+  }
+  throw new Error("Timeout");
+}
+
 async function scoreWithFastAPI(evalData) {
   const res = await fetch(ML_SERVICE_URL, {
     method: "POST",
@@ -44,7 +91,7 @@ async function scoreWithFastAPI(evalData) {
 }
 
 async function processCampaign(job) {
-  const { campaignUid } = job.data;
+  const { campaignUid, cid } = job.data;
   console.log(`[Worker] Processing ${campaignUid}`);
 
   try {
@@ -54,10 +101,20 @@ async function processCampaign(job) {
       return;
     }
 
-    // TODO: In real deployment, fetch actual campaign payload from IPFS / off-chain store
-    // For v1.0.0 we keep the test payload but log a clear warning
-    const evalData = GOOD_PAYLOAD; // Replace this with real fetch in next iteration
-    console.warn(`[Worker] Using test payload for ${campaignUid} — replace with real content fetch`);
+    let evalData;
+    if (process.env.USE_TEST_PAYLOAD === "true" || !cid) {
+      console.warn(`[Worker] Using test payload for ${campaignUid} — replace with real content fetch`);
+      evalData = GOOD_PAYLOAD;
+    } else {
+      try {
+        evalData = await fetchFromIpfs(cid);
+      } catch (e) {
+        const reason = ["Timeout", "PayloadTooLarge", "FetchFailed", "NotFound", "HashMismatch"].includes(e.message) ? e.message : "FetchFailed";
+        console.log(`  → Fetch failed (${reason}). Publishing abstain.`);
+        await publishAbstain(campaignUid, reason);
+        return;
+      }
+    }
 
     const scoreResult = await scoreWithFastAPI(evalData);
     if (!scoreResult.passes_threshold) {
@@ -96,9 +153,6 @@ async function processCampaign(job) {
 async function startWorker() {
   const deployerAddress = wallet.address;
 
-  // Make sure P2P node is started in register_and_start.js, so we don't start it here 
-  // again unless needed. Worker just publishes via p2p.js which shares the instance.
-  
   const worker = new Worker(QUEUE_NAME, processCampaign, {
     connection,
     concurrency: 4

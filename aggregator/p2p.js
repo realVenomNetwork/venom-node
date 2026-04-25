@@ -131,6 +131,17 @@ async function publishSignature(campaignUid, score, signature) {
   await libp2p.services.pubsub.publish(TOPIC, new TextEncoder().encode(JSON.stringify(message)));
 }
 
+async function publishAbstain(campaignUid, reason) {
+  const message = {
+    type: 'abstain',
+    campaignUid,
+    reason,
+    oracle: myPeerId,
+    timestamp: Date.now()
+  };
+  await libp2p.services.pubsub.publish(TOPIC, new TextEncoder().encode(JSON.stringify(message)));
+}
+
 async function checkAndSubmitIfLeader() { /* unchanged */ }
 
-module.exports = { startP2PNode, publishSignature };
+module.exports = { startP2PNode, publishSignature, publishAbstain };

@@ -8,19 +8,21 @@
     "dev": "nodemon register_and_start.js"
   },
   "dependencies": {
-    "bullmq": "^5.76.2",
-    "dotenv": "^17.4.2",
-    "ethers": "^6.16.0",
-    "ioredis": "^5.10.1",
-    "libp2p": "^2.1.0",
     "@chainsafe/libp2p-gossipsub": "^14.1.0",
-    "@libp2p/tcp": "^10.0.0",
     "@chainsafe/libp2p-noise": "^16.0.0",
     "@libp2p/mplex": "^11.0.0",
+    "@libp2p/tcp": "^10.0.0",
     "@multiformats/multiaddr": "^12.3.0",
-    "@openzeppelin/contracts": "^5.0.2"
+    "@openzeppelin/contracts": "^5.6.1",
+    "bullmq": "^5.76.2",
+    "dotenv": "^17.4.2",
+    "ioredis": "^5.10.1",
+    "libp2p": "^2.1.0"
   },
   "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^6.1.2",
+    "chai": "^4.5.0",
+    "ethers": "^6.16.0",
     "hardhat": "^2.28.6",
     "nodemon": "^3.1.0"
   },

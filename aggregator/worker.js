@@ -23,7 +23,7 @@ const wallet = new ethers.Wallet(deployerKey, provider);
 
 const PilotEscrowABI = [
   "function closeCampaign(bytes32,address,uint256,uint256,uint256[],bytes[]) external",
-  "function campaigns(bytes32) view returns (uint256 balance, bool closed, bool retired, bool compromised, uint256 lastNonce)"
+  "function campaigns(bytes32) view returns (address recipient, uint256 bounty, bool closed, uint256 fundedBlock)"
 ];
 
 const pilotEscrow = new ethers.Contract(PILOT_ESCROW_ADDRESS, PilotEscrowABI, wallet);
@@ -66,8 +66,22 @@ async function processCampaign(job) {
     }
 
     const scoreInt = Math.floor(scoreResult.final_score * 100);
-    const messageHash = ethers.solidityPackedKeccak256(["bytes32", "uint256"], [campaignUid, scoreInt]);
-    const signature = await wallet.signMessage(ethers.getBytes(messageHash));
+    const domain = {
+      name: "VENOM PilotEscrow",
+      version: "1",
+      chainId: (await provider.getNetwork()).chainId,
+      verifyingContract: PILOT_ESCROW_ADDRESS,
+    };
+
+    const types = {
+      Score: [
+        { name: "campaignUid", type: "bytes32" },
+        { name: "score", type: "uint256" },
+      ],
+    };
+
+    const value = { campaignUid, score: scoreInt };
+    const signature = await wallet.signTypedData(domain, types, value);
 
     console.log(`  → Evaluated and signed score ${scoreInt} for ${campaignUid}`);
 

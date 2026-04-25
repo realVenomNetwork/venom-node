@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VENOM Node Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap');
+        
+        :root {
+            --primary: #00f5ff;
+        }
+        
+        body {
+            font-family: 'Inter', system_ui, sans-serif;
+        }
+        
+        .font-display {
+            font-family: 'Space Grotesk', 'Inter', system_ui, sans-serif;
+            font-weight: 600;
+        }
+
+        .metric-card {
+            transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .metric-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .log-line {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.75rem;
+            line-height: 1.4;
+        }
+
+        .status-dot {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        .venom-glow {
+            box-shadow: 0 0 15px rgba(0, 245, 255, 0.3);
+        }
+    </style>
+</head>
+<body class="bg-zinc-950 text-zinc-200">
+    <div class="max-w-7xl mx-auto p-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8">
+            <div class="flex items-center gap-x-3">
+                <div class="w-10 h-10 bg-cyan-500 rounded-2xl flex items-center justify-center">
+                    <i class="fas fa-network-wired text-white text-2xl"></i>
+                </div>
+                <div>
+                    <h1 class="font-display text-3xl font-semibold tracking-tighter">VENOM Node</h1>
+                    <p class="text-zinc-400 text-sm">Decentralized Oracle Network</p>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-x-2">
+                <div class="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-2xl flex items-center gap-x-2 text-sm">
+                    <div class="w-2 h-2 bg-emerald-400 rounded-full status-dot"></div>
+                    <span class="font-medium">Online</span>
+                </div>
+                <div class="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-2xl text-sm font-mono">
+                    Peer: <span id="peer-id">12D3KooW...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Metrics -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+            <!-- Stake -->
+            <div class="metric-card bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+                <div class="flex justify-between items-start mb-4">
+                    <div>
+                        <p class="text-zinc-400 text-sm">Current Stake</p>
+                        <div class="flex items-baseline gap-x-1 mt-1">
+                            <span id="stake-value" class="text-4xl font-semibold tabular-nums">1.00</span>
+                            <span class="text-zinc-400">ETH</span>
+                        </div>
+                    </div>
+                    <i class="fas fa-coins text-3xl text-amber-400"></i>
+                </div>
+                <div class="h-2 bg-zinc-800 rounded-full overflow-hidden">
+                    <div class="h-2 bg-gradient-to-r from-amber-400 to-yellow-400 w-[100%]" style="width: 100%"></div>
+                </div>
+                <p class="text-[10px] text-emerald-400 mt-1.5">100% Healthy • No slashes</p>
+            </div>
+
+            <!-- Total Earned -->
+            <div class="metric-card bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+                <div class="flex justify-between items-start mb-4">
+                    <div>
+                        <p class="text-zinc-400 text-sm">Total Earned (30d)</p>
+                        <div class="flex items-baseline gap-x-1 mt-1">
+                            <span id="earned-value" class="text-4xl font-semibold tabular-nums">0.124</span>
+                            <span class="text-zinc-400">ETH</span>
+                        </div>
+                    </div>
+                    <i class="fas fa-chart-line text-3xl text-emerald-400"></i>
+                </div>
+                <div class="text-emerald-400 text-sm flex items-center gap-x-1">
+                    <i class="fas fa-arrow-up"></i>
+                    <span>+0.008 ETH today</span>
+                </div>
+            </div>
+
+            <!-- Campaigns Closed -->
+            <div class="metric-card bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+                <div class="flex justify-between items-start mb-4">
+                    <div>
+                        <p class="text-zinc-400 text-sm">Campaigns Closed</p>
+                        <div class="flex items-baseline gap-x-1 mt-1">
+                            <span id="campaigns-value" class="text-4xl font-semibold tabular-nums">124</span>
+                        </div>
+                    </div>
+                    <i class="fas fa-check-circle text-3xl text-cyan-400"></i>
+                </div>
+                <div class="text-cyan-400 text-sm">12 today • 98.4% success rate</div>
+            </div>
+        </div>
+
+        <!-- Activity Feed -->
+        <div class="bg-zinc-900 border border-zinc-800 rounded-3xl p-6">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-x-2">
+                    <i class="fas fa-terminal text-cyan-400"></i>
+                    <h3 class="font-semibold">Live Activity Feed</h3>
+                </div>
+                <div class="text-xs px-2 py-1 bg-zinc-800 rounded-xl text-zinc-400">Real-time</div>
+            </div>
+            
+            <div id="activity-feed" 
+                 class="h-80 overflow-y-auto bg-black/50 rounded-2xl p-4 font-mono text-xs space-y-1 text-zinc-300">
+                <!-- Logs populated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Tailwind script
+        function initializeTailwind() {
+            document.documentElement.style.setProperty('--accent', '#00f5ff');
+        }
+
+        let logs = [];
+        let totalEarned = 0.124;
+        let campaignsClosed = 124;
+
+        function addLog(message, type = 'info') {
+            const feed = document.getElementById('activity-feed');
+            const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            
+            let colorClass = 'text-zinc-400';
+            if (type === 'success') colorClass = 'text-emerald-400';
+            if (type === 'warning') colorClass = 'text-amber-400';
+            if (type === 'error') colorClass = 'text-red-400';
+            
+            const logHTML = `
+                <div class="log-line flex gap-x-3">
+                    <span class="text-zinc-500 w-16 shrink-0">[${timestamp}]</span>
+                    <span class="${colorClass}">${message}</span>
+                </div>
+            `;
+            
+            feed.innerHTML = logHTML + feed.innerHTML;
+            
+            // Keep only last 20 logs
+            if (feed.children.length > 20) {
+                feed.removeChild(feed.lastChild);
+            }
+        }
+
+        function simulateIncomingCampaign() {
+            addLog("Payload received from chain", "info");
+            setTimeout(() => addLog("FastAPI eval: 0.87 (PASS)", "success"), 800);
+            setTimeout(() => addLog("Libp2p signature gossiped to mesh", "info"), 1600);
+            
+            setTimeout(() => {
+                const wonLeader = Math.random() > 0.7;
+                if (wonLeader) {
+                    addLog("Leader election won → Broadcasting tx...", "success");
+                    setTimeout(() => {
+                        addLog("+0.001 ETH bounty received", "success");
+                        totalEarned += 0.001;
+                        campaignsClosed++;
+                        updateMetrics();
+                    }, 1200);
+                } else {
+                    addLog("Waiting for leader to submit...", "info");
+                }
+            }, 2400);
+        }
+
+        function simulateSlashing() {
+            const feed = document.getElementById('activity-feed');
+            feed.innerHTML = `
+                <div class="log-line flex gap-x-3 text-red-400 font-bold">
+                    <span class="text-red-500 w-16 shrink-0">[CRITICAL]</span>
+                    <span>MEDIAN DEVIATION DETECTED — 25% STAKE SLASHED</span>
+                </div>
+            ` + feed.innerHTML;
+            
+            // Update stake
+            const stakeEl = document.getElementById('stake-value');
+            let current = parseFloat(stakeEl.textContent);
+            current -= 0.25;
+            stakeEl.textContent = current.toFixed(2);
+            
+            // Flash red
+            const stakeCard = stakeEl.parentElement.parentElement;
+            stakeCard.style.borderColor = '#ef4444';
+            setTimeout(() => {
+                stakeCard.style.borderColor = '#27272a';
+            }, 3000);
+        }
+
+        function updateMetrics() {
+            document.getElementById('earned-value').textContent = totalEarned.toFixed(3);
+            document.getElementById('campaigns-value').textContent = campaignsClosed;
+        }
+
+        function initializeDashboard() {
+            initializeTailwind();
+            
+            // Initial logs
+            setTimeout(() => addLog("Node started successfully", "success"), 300);
+            setTimeout(() => addLog("Connected to 7 peers via Libp2p", "info"), 800);
+            setTimeout(() => addLog("FastAPI ML service: healthy", "success"), 1300);
+            
+            // Auto-simulate some activity
+            setTimeout(() => simulateIncomingCampaign(), 4500);
+            setTimeout(() => simulateIncomingCampaign(), 12000);
+            
+            // Random incoming campaigns
+            setInterval(() => {
+                if (Math.random() > 0.6) {
+                    simulateIncomingCampaign();
+                }
+            }, 18000);
+            
+            // Update peer ID (fake)
+            document.getElementById('peer-id').textContent = 
+                '12D3KooW' + Math.random().toString(36).substring(2, 10);
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            if (e.key === "?") {
+                simulateIncomingCampaign();
+            }
+            if (e.key.toLowerCase() === "s") {
+                simulateSlashing();
+            }
+        });
+
+        // Boot dashboard
+        window.onload = initializeDashboard;
+    </script>
+</body>
+</html>

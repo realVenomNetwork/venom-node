@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: venom-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  ml-service:
+    build:
+      context: ./ml_service
+      dockerfile: Dockerfile
+    container_name: venom-ml-service
+    ports:
+      - "8000:8000"
+    environment:
+      - TF_ENABLE_ONEDNN_OPTS=0
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  venom-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: venom-node
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ML_SERVICE_URL=http://ml-service:8000/evaluate
+    depends_on:
+      - redis
+      - ml-service
+    restart: unless-stopped
+    command: ["node", "register_and_start.js"]
+
+volumes:
+  redis_data:

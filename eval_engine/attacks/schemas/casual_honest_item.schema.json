@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://venom.local/schemas/casual_honest_item.schema.json",
+  "title": "Casual Honest Corpus Item",
+  "type": "object",
+  "required": ["id", "prompt", "human_answer"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "human_answer": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reference_answer": {
+      "type": ["string", "null"],
+      "description": "Optional scorer reference. Prefer joining by prompt catalog when available."
+    },
+    "length_bucket": {
+      "type": ["string", "null"]
+    },
+    "register": {
+      "type": ["string", "null"]
+    },
+    "proficiency": {
+      "type": ["string", "null"]
+    },
+    "domain": {
+      "type": ["string", "null"]
+    },
+    "source": {
+      "type": ["string", "null"]
+    },
+    "human_quality_rating": {
+      "type": ["number", "integer", "null"],
+      "description": "Optional external rating. Missing/null is valid and expected for unrated corpora."
+    }
+  },
+  "additionalProperties": true
+}

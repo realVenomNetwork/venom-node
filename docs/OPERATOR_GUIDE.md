@@ -1,12 +1,12 @@
-# VENOM Network Operator Guide
+# VENOM Node Operator Guide
 
-Run a Base Sepolia testnet oracle node for VENOM Network.
+Run a Base Sepolia testnet oracle node for VENOM Node.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/realVenomNetwork/venom-network.git
-cd venom-network
+git clone https://github.com/realVenomNetwork/venom-node.git
+cd venom-node
 cp .env.example .env
 # Edit .env with RPC_URL, DEPLOYER_PRIVATE_KEY, VENOM_REGISTRY_ADDRESS, and PILOT_ESCROW_ADDRESS.
 docker compose up -d --build

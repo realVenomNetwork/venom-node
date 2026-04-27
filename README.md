@@ -1,4 +1,4 @@
-# VENOM Network
+# VENOM Node
 
 Decentralized ML-gated oracle node with governance, council, and charitable redirection modules in one project root.
 
@@ -22,7 +22,7 @@ This repository folds the previous side folders into one active project:
 - `venom-tithe` -> faith-specific governance material in `contracts/governance/faith` and `docs/governance`.
 
 ```text
-venom-network/
+venom-node/
   aggregator/              Node runtime queue, gossip, and worker logic
   contracts/               Hardhat contracts
     PilotEscrow.sol
@@ -121,4 +121,4 @@ The active `TitheManager` is the worldview-agnostic version. The older Christian
 - [Governance Notes](docs/governance/council.md)
 - [Escrow/Governance Integration Plan](docs/governance/PILOT_ESCROW_INTEGRATION.md)
 
-Generated folders such as `artifacts`, `cache`, and `node_modules` are ignored. The old side repos and raw export folders are preserved under `_archive/` for reference while this root remains the active project.
+Generated folders such as `artifacts`, `cache`, and `node_modules` are ignored.

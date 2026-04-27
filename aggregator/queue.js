@@ -1,24 +1,46 @@
-// aggregator/queue.js
 const { Queue } = require('bullmq');
 const IORedis = require('ioredis');
 const path = require('path');
 
-// Robust .env loading
 const rootEnvPath = path.join(__dirname, "../.env");
 require("dotenv").config({ path: rootEnvPath, quiet: true });
 
-// Redis connection
-const connection = new IORedis({
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: process.env.REDIS_PORT || 6379,
-  maxRetriesPerRequest: null
-});
-
 const QUEUE_NAME = 'venom-campaigns';
-const campaignQueue = new Queue(QUEUE_NAME, { connection });
+let connection = null;
+let campaignQueue = null;
+
+function getConnection() {
+  if (!connection) {
+    connection = new IORedis({
+      host: process.env.REDIS_HOST || '127.0.0.1',
+      port: Number(process.env.REDIS_PORT || 6379),
+      maxRetriesPerRequest: null
+    });
+  }
+  return connection;
+}
+
+function getCampaignQueue() {
+  if (!campaignQueue) {
+    campaignQueue = new Queue(QUEUE_NAME, { connection: getConnection() });
+  }
+  return campaignQueue;
+}
+
+async function closeQueueResources() {
+  if (campaignQueue) {
+    await campaignQueue.close();
+    campaignQueue = null;
+  }
+  if (connection) {
+    await connection.quit();
+    connection = null;
+  }
+}
 
 module.exports = {
-  campaignQueue,
-  connection,
-  QUEUE_NAME
+  QUEUE_NAME,
+  getConnection,
+  getCampaignQueue,
+  closeQueueResources
 };

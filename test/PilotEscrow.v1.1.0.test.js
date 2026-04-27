@@ -106,6 +106,20 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
         expect((await escrow.campaigns(uid)).closed).to.be.true;
     });
 
+    it("5b. Duplicate abstains by one oracle do not inflate participation", async function () {
+        const uid = ethers.id("Q5B");
+        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+
+        const scores = [75, 75, 75, 75, 75];
+        const scoreSigs = await signEip712Score(oracles.slice(0, 5), uid, scores, escrow);
+
+        const reasons = [0, 0];
+        const abstainSigs = await signEip712Abstain([oracles[5], oracles[5]], uid, reasons, escrow);
+
+        await expect(escrow.closeCampaign(uid, scores, scoreSigs, reasons, abstainSigs))
+            .to.be.revertedWith("Below participation floor");
+    });
+
     it("6. Cancel before timeout reverts", async function () {
         const uid = ethers.id("C1");
         await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });

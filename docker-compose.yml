@@ -1,15 +1,18 @@
-version: '3.8'
-
 services:
   redis:
     image: redis:7-alpine
     container_name: venom-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   ml-service:
     build:
@@ -17,12 +20,19 @@ services:
       dockerfile: Dockerfile
     container_name: venom-ml-service
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       - TF_ENABLE_ONEDNN_OPTS=0
     restart: unless-stopped
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   venom-node:
     build:
@@ -30,15 +40,18 @@ services:
       dockerfile: Dockerfile
     container_name: venom-node
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       - NODE_ENV=production
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - ML_SERVICE_URL=http://ml-service:8000/evaluate
     depends_on:
-      - redis
-      - ml-service
+      redis:
+        condition: service_healthy
+      ml-service:
+        condition: service_healthy
     restart: unless-stopped
     command: ["node", "register_and_start.js"]
 

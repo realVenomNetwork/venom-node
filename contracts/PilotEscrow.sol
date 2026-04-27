@@ -4,6 +4,13 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./VenomRegistry.sol";
 
+/**
+ * @title PilotEscrow
+ * @notice Stores testnet campaign bounties and closes campaigns after oracle score quorum.
+ * @dev Current v1.1 release candidate verifies EIP-712 score and abstain signatures,
+ * applies quorum checks, and returns the funded bounty to the campaign recipient
+ * recorded at funding time. Operator bounty payout is not implemented yet.
+ */
 contract PilotEscrow is Ownable {
     VenomRegistry public immutable registry;
 
@@ -12,8 +19,7 @@ contract PilotEscrow is Ownable {
     uint256 public constant SCORE_QUORUM_PCT = 50;          // BFT majority
     uint256 public constant PARTICIPATION_FLOOR_PCT = 67;   // supermajority of network must have seen the campaign
     uint256 public constant PASS_THRESHOLD = 60;
-    uint256 public constant MAX_DEVIATION = 25;
-    uint256 public constant CAMPAIGN_TIMEOUT_BLOCKS = 7200; // ~24h on Base
+    uint256 public constant CAMPAIGN_TIMEOUT_BLOCKS = 7200; // ~4h on Base at ~2s blocks
     uint256 public constant CANCEL_FEE_BPS = 100;           // 1% retained on cancel
 
     // === EIP-712 ===
@@ -38,9 +44,13 @@ contract PilotEscrow is Ownable {
     }
     mapping(bytes32 => Campaign) public campaigns;
 
+    /// @notice Emitted when a funder creates a campaign bounty.
     event CampaignFunded(bytes32 indexed campaignUid, address indexed funder, uint256 amount);
+    /// @notice Emitted after quorum, median threshold, and transfer all succeed.
     event CampaignClosed(bytes32 indexed campaignUid, address indexed recipient, uint256 bounty, uint256 medianScore);
+    /// @notice Emitted when the funder cancels a timed-out campaign.
     event CampaignCancelled(bytes32 indexed campaignUid, address indexed funder, uint256 refund, uint256 fee);
+    /// @notice Emitted when cancellation fees are retained by the insurance pool.
     event InsurancePoolDeposit(uint256 amount, string reason);
 
     constructor(address _registry) Ownable(msg.sender) {
@@ -54,6 +64,7 @@ contract PilotEscrow is Ownable {
         ));
     }
 
+    /// @notice Fund a new campaign and record the funder as the current recipient.
     function fundCampaign(bytes32 campaignUid) external payable {
         require(msg.value > 0, "Bounty must be > 0");
         require(campaigns[campaignUid].recipient == address(0), "Campaign already exists");
@@ -107,11 +118,12 @@ contract PilotEscrow is Ownable {
         campaign.closed = true;
 
         // 6. Slashing — only on score deviations. Abstentions are never slashing-eligible.
+        uint256 maxDeviation = registry.MAX_DEVIATION();
         for (uint256 i = 0; i < validScoreCount; i++) {
             uint256 deviation = validScores[i] > medianScore
                 ? validScores[i] - medianScore
                 : medianScore - validScores[i];
-            if (deviation > MAX_DEVIATION) {
+            if (deviation > maxDeviation) {
                 registry.reportDeviation(validSigners[i], validScores[i], medianScore);
             }
         }
@@ -219,6 +231,7 @@ contract PilotEscrow is Ownable {
     // === Median ===
 
     function _medianOfCopy(uint256[] memory src, uint256 count) internal pure returns (uint256) {
+        // Bubble sort is acceptable here because REQUIRED_ORACLES keeps the scoring set small.
         uint256[] memory a = new uint256[](count);
         for (uint256 i = 0; i < count; i++) a[i] = src[i];
         for (uint256 i = 0; i < count - 1; i++) {

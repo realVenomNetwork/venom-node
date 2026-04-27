@@ -1,0 +1,12 @@
+{
+  "prompts": [
+    {
+      "id": "public-fixture-001",
+      "prompt": "Summarize the tradeoffs of allocating a DAO treasury grant to public goods.",
+      "reference_answer": "The answer should compare ecosystem reputation, contributor attraction, measurable public benefit, runway reduction, opportunity cost, and governance overhead.",
+      "must_contain_any": ["reputation", "runway", "opportunity cost"],
+      "min_length": 10,
+      "max_length": 80
+    }
+  ]
+}

@@ -1,10 +1,10 @@
 {
   "_format": "hh-sol-cache-2",
   "files": {
-    "C:\\Users\\mjisa\\dev\\venom-node\\contracts\\PilotEscrow.sol": {
-      "lastModificationDate": 1777127763169,
-      "contentHash": "d8889a76d046093b27ab687c04b78ddd",
-      "sourceName": "contracts/PilotEscrow.sol",
+    "C:\\Users\\mjisa\\dev\\venom-network\\contracts\\governance\\AgreementFactory.sol": {
+      "lastModificationDate": 1777243924088,
+      "contentHash": "c900001a8cda473626456949cb85da05",
+      "sourceName": "contracts/governance/AgreementFactory.sol",
       "solcConfig": {
         "version": "0.8.20",
         "settings": {
@@ -32,19 +32,20 @@
       },
       "imports": [
         "@openzeppelin/contracts/access/Ownable.sol",
-        "./VenomRegistry.sol"
+        "./MinimalMultiSig.sol"
       ],
       "versionPragmas": [
         "^0.8.20"
       ],
       "artifacts": [
-        "PilotEscrow"
+        "AgreementFactory",
+        "ICouncilRegistry"
       ]
     },
-    "C:\\Users\\mjisa\\dev\\venom-node\\contracts\\VenomRegistry.sol": {
-      "lastModificationDate": 1777127763169,
-      "contentHash": "be458c27c9a9405b7eb851d8070e960a",
-      "sourceName": "contracts/VenomRegistry.sol",
+    "C:\\Users\\mjisa\\dev\\venom-network\\contracts\\governance\\MinimalMultiSig.sol": {
+      "lastModificationDate": 1777247242469,
+      "contentHash": "b5efb45734a6045b9695e42e9c2f270a",
+      "sourceName": "contracts/governance/MinimalMultiSig.sol",
       "solcConfig": {
         "version": "0.8.20",
         "settings": {
@@ -70,18 +71,16 @@
           }
         }
       },
-      "imports": [
-        "@openzeppelin/contracts/access/Ownable.sol"
-      ],
+      "imports": [],
       "versionPragmas": [
         "^0.8.20"
       ],
       "artifacts": [
-        "VenomRegistry"
+        "MinimalMultiSig"
       ]
     },
-    "C:\\Users\\mjisa\\dev\\venom-node\\node_modules\\@openzeppelin\\contracts\\access\\Ownable.sol": {
-      "lastModificationDate": 1777127866211,
+    "C:\\Users\\mjisa\\dev\\venom-network\\node_modules\\@openzeppelin\\contracts\\access\\Ownable.sol": {
+      "lastModificationDate": 1777240265887,
       "contentHash": "d3c790edc9ccf808a17c5a6cd13614fd",
       "sourceName": "@openzeppelin/contracts/access/Ownable.sol",
       "solcConfig": {
@@ -119,8 +118,8 @@
         "Ownable"
       ]
     },
-    "C:\\Users\\mjisa\\dev\\venom-node\\node_modules\\@openzeppelin\\contracts\\utils\\Context.sol": {
-      "lastModificationDate": 1777127865960,
+    "C:\\Users\\mjisa\\dev\\venom-network\\node_modules\\@openzeppelin\\contracts\\utils\\Context.sol": {
+      "lastModificationDate": 1777240265955,
       "contentHash": "67bfbc07588eb8683b3fd8f6f909563e",
       "sourceName": "@openzeppelin/contracts/utils/Context.sol",
       "solcConfig": {
@@ -154,6 +153,241 @@
       ],
       "artifacts": [
         "Context"
+      ]
+    },
+    "C:\\Users\\mjisa\\dev\\venom-network\\contracts\\VenomRegistry.sol": {
+      "lastModificationDate": 1777245377054,
+      "contentHash": "393c32711e44530a7840f970a496277a",
+      "sourceName": "contracts/VenomRegistry.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "@openzeppelin/contracts/access/Ownable.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "VenomRegistry"
+      ]
+    },
+    "C:\\Users\\mjisa\\dev\\venom-network\\contracts\\PilotEscrow.sol": {
+      "lastModificationDate": 1777245376964,
+      "contentHash": "f4100f82cdfab56a7e623c0f1a68ddee",
+      "sourceName": "contracts/PilotEscrow.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "@openzeppelin/contracts/access/Ownable.sol",
+        "./VenomRegistry.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "PilotEscrow"
+      ]
+    },
+    "C:\\Users\\mjisa\\dev\\venom-network\\contracts\\governance\\TitheManager.sol": {
+      "lastModificationDate": 1777247242526,
+      "contentHash": "baf834af4869eeb9542a2b545731b97e",
+      "sourceName": "contracts/governance/TitheManager.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "@openzeppelin/contracts/access/Ownable.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "TitheManager"
+      ]
+    },
+    "C:\\Users\\mjisa\\dev\\venom-network\\contracts\\governance\\faith\\CreedValidator.sol": {
+      "lastModificationDate": 1777247242578,
+      "contentHash": "9d5887885d75bcafd77e2a3f9718cf58",
+      "sourceName": "contracts/governance/faith/CreedValidator.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "@openzeppelin/contracts/access/Ownable.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "CreedValidator"
+      ]
+    },
+    "C:\\Users\\mjisa\\dev\\venom-network\\contracts\\governance\\CouncilRegistry.sol": {
+      "lastModificationDate": 1777240604436,
+      "contentHash": "93f313a87585ffee3a423bd282660993",
+      "sourceName": "contracts/governance/CouncilRegistry.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "@openzeppelin/contracts/access/Ownable.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "CouncilRegistry"
+      ]
+    },
+    "C:\\Users\\mjisa\\dev\\venom-network\\contracts\\governance\\ConsentManager.sol": {
+      "lastModificationDate": 1777242022528,
+      "contentHash": "abb1749dc193bcb3894b771944a06bd6",
+      "sourceName": "contracts/governance/ConsentManager.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "@openzeppelin/contracts/access/Ownable.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "ConsentManager"
       ]
     }
   }

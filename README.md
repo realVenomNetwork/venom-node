@@ -1,100 +1,124 @@
-# VENOM Node v1.0.1
+# VENOM Network
 
-**Decentralized ML-Gated Oracle Network**  
-A permissionless, cryptoeconomically secured oracle that evaluates AI-generated content using hybrid deterministic + semantic scoring, Libp2p gossip consensus, and on-chain median slashing.
+Decentralized ML-gated oracle node with governance, council, and charitable redirection modules in one project root.
 
-**Current Version:** v1.0.1 (Security Hotfix)  
-**Network:** Base Sepolia Testnet  
-**Status:** Production-ready for testnet operators
+## Status
 
----
+This is a Base Sepolia testnet project. The contracts are unaudited and should not be used with mainnet funds. The current node still supports a controlled test payload mode while v1.1 real payload fetching is being finished.
 
-## 🚀 Quick Start (One Command)
+Current economic limitations:
 
-```bash
-git clone https://github.com/realVenomNetwork/venom-node.git
-cd venom-node
-cp .env.example .env
-# Edit .env with your DEPLOYER_PRIVATE_KEY and RPC_URLS
-docker-compose up -d
+- `VenomRegistry.MIN_STAKE` is `1 ETH` on testnet.
+- `VenomRegistry.SLASH_PERCENT` is currently `5`.
+- `PilotEscrow.fundCampaign()` records the funder as the current campaign recipient, so `closeCampaign()` returns the campaign bounty to that address. Operator bounty payouts are not implemented in the active contract yet.
+- Oracle unstaking is not implemented. Slashed stake is tracked in `slashedStakeReserve` and can be withdrawn by the registry owner; remaining active stake stays locked until an unstake flow is added.
+
+## Consolidated Layout
+
+This repository folds the previous side folders into one active project:
+
+- `venom-node` -> runtime node, aggregator, contracts, dashboard, ML service, tests, and Docker setup.
+- `venom-council` -> `contracts/governance`, `scripts/governance`, and `docs/governance`.
+- `venom-tithe` -> faith-specific governance material in `contracts/governance/faith` and `docs/governance`.
+
+```text
+venom-network/
+  aggregator/              Node runtime queue, gossip, and worker logic
+  contracts/               Hardhat contracts
+    PilotEscrow.sol
+    VenomRegistry.sol
+    governance/            Council, agreement, consent, and tithe contracts
+      faith/               Optional faith-specific attestation contracts
+  dashboard/               Static operator dashboard
+  data/prompts/            Small prompt-audit fixtures
+  docs/                    Operator, roadmap, architecture, and governance notes
+  eval_engine/             Python evaluation and audit harnesses
+  ml_service/              FastAPI scoring service
+  rpc/                     RPC/router helpers
+  scripts/                 Deployment and demo scripts
+  test/                    Hardhat tests
 ```
 
-Your node will automatically:
-- Stake 1 ETH (testnet)
-- Register with its real Libp2p multiaddr
-- Join the gossip mesh
-- Start evaluating campaigns
+## Quick Start
 
----
+```bash
+npm install
+cp .env.example .env
+npm run compile
+npm test
+```
 
-## v1.0.1 Security Hotfix & Current Limitations
+For the full local node stack:
 
-**This release contains a critical security hotfix.**
+```bash
+docker compose up -d --build
+```
 
-### What Was Fixed in v1.0.1
-- **Slashing Index Corruption Bug** — Fixed a zero-day vulnerability where the in-place bubble sort in `_calculateMedian` could cause incorrect slashing of honest oracles. Signers are now recovered **before** sorting using a parallel `validSigners` array.
-- **Operator Bounty Payout** — The 0.001 ETH bounty now correctly goes to the operator whose node submits the aggregated `closeCampaign` transaction.
-- **Real Libp2p Bootstrapping** — Nodes now register their actual listening multiaddress instead of a fake one derived from the private key.
-- **Docker Environment Variables** — `ML_SERVICE_URL` is now correctly read from the container environment.
+Redis and the ML service are bound to `127.0.0.1` by default, not exposed on all host interfaces.
 
-### Current Limitations (v1.0.0 / v1.0.1)
+## Quick Architecture Overview
 
-> **Important:** All nodes currently evaluate the **same hardcoded test payload** (`GOOD_PAYLOAD` in `aggregator/worker.js`).
+```mermaid
+flowchart LR
+  PilotEscrow["PilotEscrow<br/>CampaignFunded event"] --> Producer["Producer<br/>event scanner"]
+  Producer --> Redis["Redis / BullMQ<br/>campaign queue + scan cursor"]
+  Redis --> Worker["Worker<br/>fetch + score + sign"]
+  Worker --> ML["ML Service<br/>/evaluate"]
+  Worker --> P2P["Libp2p gossip<br/>score/abstain signatures"]
+  P2P --> Close["closeCampaign()<br/>aggregated transaction"]
+  Close --> PilotEscrow
+  PilotEscrow --> Registry["VenomRegistry<br/>oracle status + slashing"]
+  Governance["Governance contracts<br/>Council / Consent / Tithe"] -. "planned integration" .-> PilotEscrow
+```
 
-- Real campaign content is **not yet fetched** from IPFS or any off-chain store.
-- This is **intentional** for the Genesis release so we can validate the consensus and slashing mechanics in a controlled environment.
-- A clear warning is logged on every evaluation:  
-  `[Worker] Using test payload for <campaignUid> — replace with real content fetch`
+## Common Commands
 
-**Do not run this with real mainnet ETH until v1.1 (real payload fetching) is live.**
+```bash
+npm run start
+npm run compile
+npm test
+npm run coverage
+npm run demo:governance
+npm run deploy:phase4
+npm run deploy:tithe
+```
 
----
+`deploy:phase4` and `deploy:tithe` use `base-sepolia` and read `RPC_URL` plus `DEPLOYER_PRIVATE_KEY` from `.env`.
 
-## Architecture
+## Core Contracts
 
-- **Smart Contracts**: `PilotEscrow.sol` + `VenomRegistry.sol` (median consensus + 25% slashing)
-- **Node Runtime**: Node.js 20 + BullMQ + Libp2p (Gossipsub)
-- **ML Engine**: FastAPI + `sentence-transformers/all-MiniLM-L6-v2` (hybrid v5.3.2 scorer)
-- **Consensus**: 5-of-N oracle signatures → on-chain median → automatic slashing of outliers
+- `contracts/VenomRegistry.sol` - oracle registration, active oracle lookup, and slashing reserve accounting.
+- `contracts/PilotEscrow.sol` - campaign funding, EIP-712 score/abstain verification, quorum checks, campaign close/cancel.
 
----
+## Governance Layer
 
-## Economic Model (Testnet)
+The v0.3 governance layer is compiled and tested with the main project:
 
-| Parameter          | Value          | Notes |
-|--------------------|----------------|-------|
-| Stake              | 1 ETH          | Testnet only |
-| Bounty per campaign| 0.001 ETH      | Paid to submitting leader |
-| Slash penalty      | 25% of stake   | For >25 point deviation from median |
+- `contracts/governance/CouncilRegistry.sol` registers worldview branches, validators, attestations, and top-validator slices.
+- `contracts/governance/AgreementFactory.sol` creates cross-branch `MinimalMultiSig` agreements when top validators have enough attestation overlap.
+- `contracts/governance/MinimalMultiSig.sol` is a small k-of-m wallet for synthetic collaboration entities.
+- `contracts/governance/ConsentManager.sol` stores per-user charitable redirection preferences.
+- `contracts/governance/TitheManager.sol` queues configurable charitable redirection amounts as claimable pull payments for bounded active recipients.
+- `contracts/governance/faith/CreedValidator.sol` is an optional faith-specific attestation module.
 
----
+`ConsentManager` and `TitheManager` are not yet wired into `PilotEscrow.closeCampaign()`. The intended integration is: read the campaign participant's consent preset, compute an effective charitable redirection rate, route that portion through `TitheManager`, and let recipients claim queued balances. Until that integration lands, they are deployable governance modules exercised by tests and the demo script, not active escrow payment logic.
 
-## Monitoring
+The active `TitheManager` is the worldview-agnostic version. The older Christian-specific tithe contract is preserved as documentation in `docs/governance/legacy-christian-tithe-manager.sol.txt` so compiler scans cannot pick up two `TitheManager` contracts.
 
-- **Dashboard**: Open `dashboard/index.html` in your browser
-- **Logs**: `docker-compose logs -f venom-node`
-- **PM2** (recommended for production): `pm2 start ecosystem.config.js`
+## Runtime Notes
 
----
+- Docker Compose starts Redis, the ML service, and the node runtime.
+- `aggregator/worker.js` can run in `USE_TEST_PAYLOAD=true` mode until real payload fetching is production-ready.
+- `dashboard/index.html` is a static local dashboard.
+- Use a dedicated low-balance hot wallet for node operation. Never use a primary wallet or cold-storage key in `.env`.
 
-## Security & Best Practices
+## More Docs
 
-- Never commit your `.env` file
-- Use a dedicated hot wallet for the node (separate from cold storage)
-- Monitor for slashing events in logs
-- Keep the node updated — v1.1 will introduce real payload fetching
+- [Architecture](docs/ARCHITECTURE.md)
+- [Operator Guide](docs/OPERATOR_GUIDE.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Project Structure](docs/PROJECT_STRUCTURE.md)
+- [Governance Notes](docs/governance/council.md)
+- [Escrow/Governance Integration Plan](docs/governance/PILOT_ESCROW_INTEGRATION.md)
 
----
-
-## Roadmap
-
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the v1.1 and beyond plan.
-
----
-
-**License:** MIT  
-**Maintained by:** realVenomNetwork  
-
----
-
-**Genesis Release — April 2026**
+Generated folders such as `artifacts`, `cache`, and `node_modules` are ignored. The old side repos and raw export folders are preserved under `_archive/` for reference while this root remains the active project.

@@ -1,53 +1,83 @@
 // aggregator/p2p.js
-// VENOM Node v1.1.0-rc.1 — Final Signed Abstention + New closeCampaign ABI
-// Now fully compatible with Claude's v1.1 contract (passes both score and abstain arrays).
+// Libp2p gossip aggregation for signed score and abstain messages.
 
-const { createLibp2p } = require('libp2p');
-const { gossipsub } = require('@chainsafe/libp2p-gossipsub');
-const { tcp } = require('@libp2p/tcp');
-const { noise } = require('@chainsafe/libp2p-noise');
-const { mplex } = require('@libp2p/mplex');
-const { multiaddr } = require('@multiformats/multiaddr');
 const { ethers } = require('ethers');
 
-const VENOM_REGISTRY_ADDRESS = process.env.VENOM_REGISTRY_ADDRESS;
-const PILOT_ESCROW_ADDRESS = process.env.PILOT_ESCROW_ADDRESS;
 const REQUIRED_ORACLES = 5;
 const TOPIC = 'venom:signatures';
 
 let libp2p;
+let libp2pModules;
+let leaderInterval;
+let activeOracleCount = REQUIRED_ORACLES;
 let pendingCampaigns = new Map();
 let myPeerId;
 let myWallet;
 
+async function loadLibp2pModules() {
+  if (libp2pModules) return libp2pModules;
+
+  const [
+    libp2pPkg,
+    gossipsubPkg,
+    tcpPkg,
+    noisePkg,
+    mplexPkg,
+    multiaddrPkg
+  ] = await Promise.all([
+    import('libp2p'),
+    import('@chainsafe/libp2p-gossipsub'),
+    import('@libp2p/tcp'),
+    import('@chainsafe/libp2p-noise'),
+    import('@libp2p/mplex'),
+    import('@multiformats/multiaddr')
+  ]);
+
+  libp2pModules = {
+    createLibp2p: libp2pPkg.createLibp2p,
+    gossipsub: gossipsubPkg.gossipsub,
+    tcp: tcpPkg.tcp,
+    noise: noisePkg.noise,
+    mplex: mplexPkg.mplex,
+    multiaddr: multiaddrPkg.multiaddr
+  };
+  return libp2pModules;
+}
+
 async function startP2PNode(wallet) {
   myWallet = wallet;
 
+  const registryAddress = process.env.VENOM_REGISTRY_ADDRESS;
+  if (!registryAddress) throw new Error("Missing VENOM_REGISTRY_ADDRESS");
+
+  const { createLibp2p, gossipsub, tcp, noise, mplex, multiaddr } = await loadLibp2pModules();
+
   const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-  const registry = new ethers.Contract(VENOM_REGISTRY_ADDRESS, [
+  const registry = new ethers.Contract(registryAddress, [
     "function getActiveOracles() view returns (address[] operators, string[] multiaddrs)"
   ], provider);
 
   const [operators, multiaddrs] = await registry.getActiveOracles();
+  activeOracleCount = Math.max(operators.length, 1);
   console.log(`[P2P] Found ${operators.length} active oracles on-chain`);
 
   libp2p = await createLibp2p({
     addresses: { listen: ['/ip4/0.0.0.0/tcp/0'] },
     transports: [tcp()],
-    connectionEncryption: [noise()],
+    connectionEncrypters: [noise()],
     streamMuxers: [mplex()],
     services: { pubsub: gossipsub({ allowPublishToZeroPeers: true }) }
   });
 
   myPeerId = libp2p.peerId.toString();
-  console.log(`🚀 VENOM P2P Node started: ${myPeerId}`);
+  console.log(`VENOM P2P node started: ${myPeerId}`);
 
   for (const addr of multiaddrs) {
     if (addr && addr.length > 0) {
       try {
         await libp2p.dial(multiaddr(addr));
         console.log(`[P2P] Connected to on-chain peer: ${addr}`);
-      } catch (e) {
+      } catch {
         console.warn(`[P2P] Failed to dial ${addr}`);
       }
     }
@@ -56,9 +86,17 @@ async function startP2PNode(wallet) {
   await libp2p.services.pubsub.subscribe(TOPIC);
   libp2p.services.pubsub.addEventListener('message', handleSignatureMessage);
 
-  setInterval(checkAndSubmitIfLeader, 5000);
-  console.log("[P2P] Fully decentralized node ready (v1.1 signed abstention + new ABI)");
-  
+  leaderInterval = setInterval(checkAndSubmitIfLeader, 5000);
+  const originalStop = libp2p.stop.bind(libp2p);
+  libp2p.stop = async () => {
+    if (leaderInterval) {
+      clearInterval(leaderInterval);
+      leaderInterval = null;
+    }
+    await originalStop();
+  };
+
+  console.log("[P2P] Node ready (v1.1 signed abstention + closeCampaign ABI)");
   return libp2p;
 }
 
@@ -69,8 +107,12 @@ async function handleSignatureMessage(evt) {
 
     if (!pendingCampaigns.has(campaignUid)) {
       pendingCampaigns.set(campaignUid, {
-        scores: [], signatures: [], signers: [],
-        abstains: [], abstainSignatures: [], abstainReasons: [], abstainSigners: []
+        scores: [],
+        signatures: [],
+        signers: [],
+        abstainSignatures: [],
+        abstainReasons: [],
+        abstainSigners: []
       });
     }
 
@@ -78,7 +120,6 @@ async function handleSignatureMessage(evt) {
 
     if (type === 'abstain') {
       if (entry.abstainSigners.includes(oracle)) return;
-      entry.abstains.push(reason);
       entry.abstainSignatures.push(signature);
       entry.abstainReasons.push(reason);
       entry.abstainSigners.push(oracle);
@@ -92,12 +133,9 @@ async function handleSignatureMessage(evt) {
     }
 
     const totalMessages = entry.signers.length + entry.abstainSigners.length;
-    if (totalMessages >= REQUIRED_ORACLES) {
-      const isLeader = await isLeaderForCampaign(campaignUid);
-      if (isLeader) {
-        await submitAggregatedTransaction(campaignUid, entry);
-        pendingCampaigns.delete(campaignUid);
-      }
+    if (totalMessages >= REQUIRED_ORACLES && await isLeaderForCampaign(campaignUid)) {
+      await submitAggregatedTransaction(campaignUid, entry);
+      pendingCampaigns.delete(campaignUid);
     }
   } catch (err) {
     console.error("[P2P] Error handling message:", err.message);
@@ -105,21 +143,18 @@ async function handleSignatureMessage(evt) {
 }
 
 async function isLeaderForCampaign(campaignUid) {
-  const activeCount = 5;
   const campaignBigInt = BigInt(campaignUid);
-  return Number(campaignBigInt % BigInt(activeCount)) === 0;
+  return Number(campaignBigInt % BigInt(activeOracleCount)) === 0;
 }
 
 async function submitAggregatedTransaction(campaignUid, entry) {
   try {
-    const recipient = myWallet.address;
-    const bounty = ethers.parseEther("0.001");
-    const payloadNonce = 0;
+    const pilotEscrowAddress = process.env.PILOT_ESCROW_ADDRESS;
+    if (!pilotEscrowAddress) throw new Error("Missing PILOT_ESCROW_ADDRESS");
 
-    console.log(`[P2P] Submitting v1.1 closeCampaign for ${campaignUid} with ${entry.signers.length} scores + ${entry.abstainSigners.length} abstains...`);
+    console.log(`[P2P] Submitting closeCampaign for ${campaignUid} with ${entry.signers.length} scores + ${entry.abstainSigners.length} abstains...`);
 
-    const pilotEscrow = new ethers.Contract(PILOT_ESCROW_ADDRESS, [
-      // v1.1 ABI — now accepts both score and abstain arrays
+    const pilotEscrow = new ethers.Contract(pilotEscrowAddress, [
       "function closeCampaign(bytes32,uint256[],bytes[],uint8[],bytes[]) external"
     ], myWallet);
 
@@ -132,18 +167,20 @@ async function submitAggregatedTransaction(campaignUid, entry) {
     );
 
     const receipt = await tx.wait();
-    console.log(`✅ SUCCESS: Campaign closed in block ${receipt.blockNumber}`);
+    console.log(`SUCCESS: Campaign closed in block ${receipt.blockNumber}`);
   } catch (err) {
-    console.error(`❌ Submission failed for ${campaignUid}:`, err.message);
+    console.error(`Submission failed for ${campaignUid}:`, err.message);
   }
 }
 
 async function publishSignature(campaignUid, score, signature) {
+  if (!libp2p) throw new Error("P2P node not started");
   const message = { campaignUid, score, signature, oracle: myPeerId, timestamp: Date.now() };
   await libp2p.services.pubsub.publish(TOPIC, new TextEncoder().encode(JSON.stringify(message)));
 }
 
 async function publishAbstain(campaignUid, reason, signature) {
+  if (!libp2p) throw new Error("P2P node not started");
   const message = {
     type: 'abstain',
     campaignUid,
@@ -155,6 +192,8 @@ async function publishAbstain(campaignUid, reason, signature) {
   await libp2p.services.pubsub.publish(TOPIC, new TextEncoder().encode(JSON.stringify(message)));
 }
 
-async function checkAndSubmitIfLeader() { /* unchanged */ }
+async function checkAndSubmitIfLeader() {
+  // Reserved for timeout/retry leadership checks. Normal submission is message-driven.
+}
 
 module.exports = { startP2PNode, publishSignature, publishAbstain };

@@ -1,0 +1,12 @@
+{
+  "prompts": [
+    {
+      "id": "rotating-fixture-001",
+      "prompt": "Explain why oracle abstentions should be signed and counted separately from scores.",
+      "reference_answer": "Signed abstentions prove participation without forcing an oracle to score unavailable or invalid content, which helps quorum accounting while avoiding unfair slashing.",
+      "must_contain_any": ["participation", "quorum", "slashing"],
+      "min_length": 10,
+      "max_length": 80
+    }
+  ]
+}

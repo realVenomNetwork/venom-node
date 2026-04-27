@@ -34,6 +34,21 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
         return Promise.all(reasons.map((reason, i) => signers[i].signTypedData(domain, types, { campaignUid, reason })));
     }
 
+    function forceHighS(signature) {
+        const secp256k1N = BigInt("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
+        const parsed = ethers.Signature.from(signature);
+        if (parsed.v !== 27 && parsed.v !== 28) {
+            throw new Error(`Unexpected signature v: ${parsed.v}`);
+        }
+        const highS = secp256k1N - BigInt(parsed.s);
+        const flippedV = parsed.v === 27 ? 28 : 27;
+        return ethers.concat([
+            parsed.r,
+            ethers.toBeHex(highS, 32),
+            ethers.toBeHex(flippedV, 1)
+        ]);
+    }
+
     it("1. Score quorum: 4 attacker scores + 6 honest abstains reverts (40% < 50% Quorum)", async function () {
         const uid = ethers.id("Q1");
         await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
@@ -178,5 +193,68 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
         // This drops the validAbstainCount to 0, resulting in 50% total participation, which fails the 67% floor.
         await expect(escrowB.closeCampaign(uid, scores, scoreSigs, reasons, abstainSigsForA))
             .to.be.revertedWith("Below participation floor");
+    });
+
+    it("10. Rejects high-s malleable score signatures", async function () {
+        const uid = ethers.id("R2");
+        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+
+        const scores = [75, 75, 75, 75, 75];
+        const scoreSigs = (await signEip712Score(oracles.slice(0, 5), uid, scores, escrow)).map(forceHighS);
+        const reasons = [0, 0, 0, 0, 0];
+        const abstainSigs = await signEip712Abstain(oracles.slice(5, 10), uid, reasons, escrow);
+
+        await expect(escrow.closeCampaign(uid, scores, scoreSigs, reasons, abstainSigs))
+            .to.be.revertedWith("Below absolute score floor");
+    });
+
+    it("11. Caps caller-provided score arrays to the active oracle count", async function () {
+        const uid = ethers.id("CAP1");
+        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+
+        const scoreSigners = [...oracles.slice(0, 10), oracles[0]];
+        const scores = Array(11).fill(75);
+        const scoreSigs = await signEip712Score(scoreSigners, uid, scores, escrow);
+
+        await expect(escrow.closeCampaign(uid, scores, scoreSigs, [], []))
+            .to.be.revertedWith("Too many scores");
+    });
+
+    it("12. Ignores signed scores outside the supported 0-100 range", async function () {
+        const uid = ethers.id("CAP2");
+        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+
+        const scores = [101, 75, 75, 75, 75];
+        const scoreSigs = await signEip712Score(oracles.slice(0, 5), uid, scores, escrow);
+        const reasons = [0, 0, 0, 0, 0];
+        const abstainSigs = await signEip712Abstain(oracles.slice(5, 10), uid, reasons, escrow);
+
+        await expect(escrow.closeCampaign(uid, scores, scoreSigs, reasons, abstainSigs))
+            .to.be.revertedWith("Below absolute score floor");
+    });
+
+    it("13. Owner can pause funding and closing during an incident", async function () {
+        const uid = ethers.id("P1");
+        await escrow.pause();
+
+        await expect(escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") }))
+            .to.be.revertedWithCustomError(escrow, "EnforcedPause");
+
+        await escrow.unpause();
+        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.pause();
+
+        await expect(escrow.closeCampaign(uid, [], [], [], []))
+            .to.be.revertedWithCustomError(escrow, "EnforcedPause");
+    });
+
+    it("14. Owner pause also blocks timed-out campaign cancellation", async function () {
+        const uid = ethers.id("P2");
+        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await ethers.provider.send("hardhat_mine", ["0x1C20"]);
+
+        await escrow.pause();
+        await expect(escrow.connect(owner).cancelCampaign(uid))
+            .to.be.revertedWithCustomError(escrow, "EnforcedPause");
     });
 });

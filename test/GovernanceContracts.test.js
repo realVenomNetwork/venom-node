@@ -58,6 +58,35 @@ describe("Governance contracts", function () {
         .to.emit(multisig, "Execution")
         .withArgs(txHashB);
     });
+
+    it("does not finalize a failed execution so signers can retry", async function () {
+      const MultiSig = await ethers.getContractFactory("MinimalMultiSig");
+      const multisig = await MultiSig.deploy([signerA.address, signerB.address, signerC.address], 2);
+
+      const CouncilRegistry = await ethers.getContractFactory("CouncilRegistry");
+      const councilRegistry = await CouncilRegistry.deploy();
+      const template = await MultiSig.deploy([owner.address], 1);
+      const AgreementFactory = await ethers.getContractFactory("AgreementFactory");
+      const rejectingTarget = await AgreementFactory.deploy(
+        await councilRegistry.getAddress(),
+        await template.getAddress()
+      );
+
+      const target = await rejectingTarget.getAddress();
+      const txHash = await multisig.getTransactionHash(target, 0, "0x", 0);
+
+      await multisig.connect(signerA).submitTransaction(target, 0, "0x");
+      await multisig.connect(signerB).confirmTransaction(txHash);
+
+      await expect(multisig.connect(signerC).executeTransaction(txHash))
+        .to.emit(multisig, "ExecutionFailure")
+        .withArgs(txHash);
+      expect(await multisig.executed(txHash)).to.equal(false);
+
+      await expect(multisig.connect(signerC).executeTransaction(txHash))
+        .to.emit(multisig, "ExecutionFailure")
+        .withArgs(txHash);
+    });
   });
 
   describe("TitheManager", function () {
@@ -262,6 +291,8 @@ describe("Governance contracts", function () {
         .to.deep.equal([signerA.address, signerB.address]);
 
       await councilRegistry.removeValidatorFromBranch(branchId, signerA.address);
+      expect(await councilRegistry.getBranchValidators(branchId))
+        .to.deep.equal([signerB.address]);
       await expect(councilRegistry.addValidatorToBranch(branchId, signerB.address))
         .to.be.revertedWith("Already in branch");
     });
@@ -282,6 +313,11 @@ describe("Governance contracts", function () {
         .to.deep.equal([333n, "secular-custom"]);
 
       await consentManager.connect(signerA).optOut();
+      expect(await consentManager.getEffectiveRate(signerA.address))
+        .to.deep.equal([0n, "none-0pct"]);
+
+      const none = await consentManager.NONE();
+      await consentManager.connect(signerA).setPreset(none);
       expect(await consentManager.getEffectiveRate(signerA.address))
         .to.deep.equal([0n, "none-0pct"]);
 
@@ -372,6 +408,11 @@ describe("Governance contracts", function () {
       const slashAmount = (stake * 5n) / 100n;
       expect(await registry.slashedStakeReserve()).to.equal(slashAmount);
       expect((await registry.oracles(signerA.address)).active).to.equal(false);
+      expect(await registry.activeOracleCount()).to.equal(0n);
+
+      await expect(registry.reportDeviation(signerA.address, 100, 50))
+        .to.emit(registry, "SlashSkipped")
+        .withArgs(signerA.address, "Inactive oracle");
 
       await expect(registry.connect(signerA).registerOracle("/ip4/127.0.0.1/tcp/4102", { value: stake }))
         .to.be.revertedWith("Oracle already exists");

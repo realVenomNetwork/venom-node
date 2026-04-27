@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title TitheManager (Worldview-Agnostic Version)
@@ -21,7 +22,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  *      and a clean mechanism to redirect a percentage of value to
  *      designated recipients (EOAs, other contracts, or a council treasury).
  */
-contract TitheManager is Ownable {
+contract TitheManager is Ownable, ReentrancyGuard {
     // === PRESETS (basis points: 10000 = 100%) ===
     uint256 public constant PRESET_CHRISTIAN_TITHE = 1000;   // 10%
     uint256 public constant PRESET_ZAKAT          = 250;     // 2.5%
@@ -154,11 +155,11 @@ contract TitheManager is Ownable {
         emit TitheDistributed(totalAmount, redirectAmount, mainRecipient);
     }
 
-    function claim() external {
+    function claim() external nonReentrant {
         _claim(payable(msg.sender));
     }
 
-    function claimFor(address payable recipient) external {
+    function claimFor(address payable recipient) external nonReentrant {
         _claim(recipient);
     }
 

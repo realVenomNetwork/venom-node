@@ -16,6 +16,7 @@ let pilotEscrow = null;
 let lastScannedBlock = null;
 let producerInterval = null;
 const SCAN_LOOKBACK_BLOCKS = Number(process.env.PRODUCER_SCAN_LOOKBACK_BLOCKS || 200);
+const REORG_LOOKBACK_BLOCKS = Number(process.env.PRODUCER_REORG_LOOKBACK_BLOCKS || 10);
 
 function getProducerRuntime() {
   if (multiProvider && pilotEscrow) {
@@ -62,10 +63,12 @@ async function discoverAndQueueNewCampaigns() {
     const runtime = getProducerRuntime();
     const currentBlock = await runtime.multiProvider.getBlockNumber();
     const storedCursor = await loadLastScannedBlock();
-    const fromBlock = storedCursor ?? Math.max(0, currentBlock - SCAN_LOOKBACK_BLOCKS);
+    const fromBlock = storedCursor === null
+      ? Math.max(0, currentBlock - SCAN_LOOKBACK_BLOCKS)
+      : Math.max(0, storedCursor - REORG_LOOKBACK_BLOCKS);
     const toBlock = currentBlock;
 
-    if (toBlock <= fromBlock) return;
+    if (toBlock < fromBlock) return;
 
     console.log(`[Producer] Scanning blocks ${fromBlock} -> ${toBlock}`);
 

@@ -6,12 +6,13 @@ Keeps the all-MiniLM-L6-v2 model warm in memory
 
 import os
 import sys
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Any
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import uvicorn
 
 # Add project root to path so we can import v51_scoring
@@ -25,14 +26,38 @@ from eval_engine.attacks.v51_scoring import (
     SEMANTIC_MODEL_NAME
 )
 
+MAX_EVALUATE_TEXT_LENGTH = int(os.getenv("MAX_EVALUATE_TEXT_LENGTH", os.getenv("MAX_PAYLOAD_BYTES", "51200")))
+MAX_EVALUATE_BYTES = int(os.getenv("MAX_EVALUATE_BYTES", os.getenv("MAX_PAYLOAD_BYTES", "51200")))
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger("venom.ml_service")
+
 # ============================================
 # Pydantic Schemas (must match Node.js daemon expectations)
 # ============================================
 
 class EvaluateRequest(BaseModel):
-    payload: str = Field(..., description="The adversarial or honest payload to evaluate")
-    reference_answer: str = Field(..., description="Reference answer for semantic comparison")
+    payload: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_EVALUATE_TEXT_LENGTH,
+        description="The adversarial or honest payload to evaluate",
+    )
+    reference_answer: str = Field(
+        ...,
+        max_length=MAX_EVALUATE_TEXT_LENGTH,
+        description="Reference answer for semantic comparison",
+    )
     campaign_uid: str | None = Field(None, description="Optional campaign identifier for logging")
+
+    @field_validator("payload", "reference_answer")
+    @classmethod
+    def enforce_utf8_byte_limit(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > MAX_EVALUATE_BYTES:
+            raise ValueError(f"text exceeds {MAX_EVALUATE_BYTES} UTF-8 bytes")
+        return value
 
 
 class EvaluateResponse(BaseModel):
@@ -104,8 +129,9 @@ async def evaluate(request: EvaluateRequest):
             },
         )
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Scoring failed: {str(e)}")
+    except Exception:
+        logger.exception("Scoring failed")
+        raise HTTPException(status_code=500, detail="Scoring failed")
 
 
 # ============================================

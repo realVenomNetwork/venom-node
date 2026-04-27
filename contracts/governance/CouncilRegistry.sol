@@ -68,6 +68,7 @@ contract CouncilRegistry is Ownable {
 
     function addValidatorToBranch(bytes32 branchId, address validator) external onlyOwner {
         require(bytes(branches[branchId].name).length > 0, "Branch not registered");
+        require(validator != address(0), "Zero address");
         require(!branches[branchId].isValidator[validator], "Already in branch");
 
         branches[branchId].validators.push(validator);
@@ -77,6 +78,14 @@ contract CouncilRegistry is Ownable {
 
     function removeValidatorFromBranch(bytes32 branchId, address validator) external onlyOwner {
         require(branches[branchId].isValidator[validator], "Not in branch");
+        address[] storage validators = branches[branchId].validators;
+        for (uint256 i = 0; i < validators.length; i++) {
+            if (validators[i] == validator) {
+                validators[i] = validators[validators.length - 1];
+                validators.pop();
+                break;
+            }
+        }
         branches[branchId].isValidator[validator] = false;
         emit ValidatorRemoved(branchId, validator);
     }

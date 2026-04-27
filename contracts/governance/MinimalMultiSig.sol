@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
 /**
  * @title MinimalMultiSig
  * @dev A clean, lightweight multi-signature wallet for use as a Synthetic Collaboration Entity.
@@ -9,10 +11,10 @@ pragma solidity ^0.8.20;
  * @notice Submits a new transaction. The first submission sets the nonce-based hash;
  * subsequent signers call confirmTransaction() to add their approval.
  * Once confirmations >= threshold, executeTransaction() can be called.
- * NOTE: A failed execution still consumes the nonce (no replay), making the
- * transaction final. This is acceptable for trusted validator environments in v0.1.
+ * NOTE: Failed executions do not finalize the transaction hash. This allows
+ * signers to retry after funding the wallet or fixing a transient target issue.
  */
-contract MinimalMultiSig {
+contract MinimalMultiSig is ReentrancyGuard {
     struct Transaction {
         address target;
         uint256 value;
@@ -90,6 +92,7 @@ contract MinimalMultiSig {
     function executeTransaction(bytes32 txHash)
         external
         onlySigner
+        nonReentrant
         returns (bytes memory)
     {
         require(submitted[txHash], "Not submitted");
@@ -101,10 +104,11 @@ contract MinimalMultiSig {
 
         (bool success, bytes memory returnData) = transaction.target.call{value: transaction.value}(transaction.data);
 
-        if (success) {
-            emit Execution(txHash);
-        } else {
+        if (!success) {
+            executed[txHash] = false;
             emit ExecutionFailure(txHash);
+        } else {
+            emit Execution(txHash);
         }
         return returnData;
     }

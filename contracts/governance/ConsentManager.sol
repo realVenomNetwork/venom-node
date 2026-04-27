@@ -35,7 +35,8 @@ contract ConsentManager is Ownable {
             presetKey == CHRISTIAN_TITHE ||
             presetKey == ZAKAT ||
             presetKey == TZEDAKAH ||
-            presetKey == SECULAR,
+            presetKey == SECULAR ||
+            presetKey == NONE,
             "Unknown preset"
         );
         _set(msg.sender, presetKey, 0);

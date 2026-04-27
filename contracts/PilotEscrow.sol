@@ -2,6 +2,9 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "./VenomRegistry.sol";
 
 /**
@@ -11,7 +14,7 @@ import "./VenomRegistry.sol";
  * applies quorum checks, and returns the funded bounty to the campaign recipient
  * recorded at funding time. Operator bounty payout is not implemented yet.
  */
-contract PilotEscrow is Ownable {
+contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
     VenomRegistry public immutable registry;
 
     // === v1.1.0-rc.1 parameters ===
@@ -19,6 +22,7 @@ contract PilotEscrow is Ownable {
     uint256 public constant SCORE_QUORUM_PCT = 50;          // BFT majority
     uint256 public constant PARTICIPATION_FLOOR_PCT = 67;   // supermajority of network must have seen the campaign
     uint256 public constant PASS_THRESHOLD = 60;
+    uint256 public constant MAX_SCORE = 100;
     uint256 public constant CAMPAIGN_TIMEOUT_BLOCKS = 7200; // ~4h on Base at ~2s blocks
     uint256 public constant CANCEL_FEE_BPS = 100;           // 1% retained on cancel
 
@@ -54,6 +58,7 @@ contract PilotEscrow is Ownable {
     event InsurancePoolDeposit(uint256 amount, string reason);
 
     constructor(address _registry) Ownable(msg.sender) {
+        require(_registry != address(0), "Zero registry");
         registry = VenomRegistry(_registry);
         DOMAIN_SEPARATOR = keccak256(abi.encode(
             DOMAIN_TYPEHASH,
@@ -64,8 +69,17 @@ contract PilotEscrow is Ownable {
         ));
     }
 
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
     /// @notice Fund a new campaign and record the funder as the current recipient.
-    function fundCampaign(bytes32 campaignUid) external payable {
+    function fundCampaign(bytes32 campaignUid) external payable whenNotPaused nonReentrant {
+        require(campaignUid != bytes32(0), "Invalid campaign");
         require(msg.value > 0, "Bounty must be > 0");
         require(campaigns[campaignUid].recipient == address(0), "Campaign already exists");
         campaigns[campaignUid] = Campaign({
@@ -85,12 +99,17 @@ contract PilotEscrow is Ownable {
         bytes[]   calldata scoreSignatures,
         uint8[]   calldata abstainReasons,
         bytes[]   calldata abstainSignatures
-    ) external {
+    ) external whenNotPaused nonReentrant {
         Campaign storage campaign = campaigns[campaignUid];
         require(!campaign.closed, "Campaign already closed");
         require(campaign.recipient != address(0), "Campaign not funded");
         require(scores.length == scoreSignatures.length, "Score length mismatch");
         require(abstainReasons.length == abstainSignatures.length, "Abstain length mismatch");
+
+        uint256 activeCount = registry.activeOracleCount();
+        require(activeCount > 0, "No active oracles");
+        require(scores.length <= activeCount, "Too many scores");
+        require(abstainReasons.length <= activeCount, "Too many abstains");
 
         // 1. Validate score sigs (de-duped by signer).
         (uint256[] memory validScores, address[] memory validSigners, uint256 validScoreCount)
@@ -102,8 +121,6 @@ contract PilotEscrow is Ownable {
         );
 
         // 3. Three quorum gates.
-        uint256 activeCount = registry.activeOracleCount();
-        require(activeCount > 0, "No active oracles");
         require(validScoreCount >= REQUIRED_ORACLES, "Below absolute score floor");
         require(validScoreCount * 100 >= activeCount * SCORE_QUORUM_PCT,
                 "Below score quorum");
@@ -136,7 +153,7 @@ contract PilotEscrow is Ownable {
     }
 
     /// @notice After CAMPAIGN_TIMEOUT_BLOCKS, the original funder can reclaim bounty minus 1% insurance fee.
-    function cancelCampaign(bytes32 campaignUid) external {
+    function cancelCampaign(bytes32 campaignUid) external whenNotPaused nonReentrant {
         Campaign storage campaign = campaigns[campaignUid];
         require(!campaign.closed, "Already closed");
         require(campaign.recipient == msg.sender, "Not funder");
@@ -164,6 +181,7 @@ contract PilotEscrow is Ownable {
         validScores = new uint256[](scores.length);
         validSigners = new address[](scores.length);
         for (uint256 i = 0; i < scores.length; i++) {
+            if (scores[i] > MAX_SCORE) continue;
             address signer = _recoverScoreSigner(campaignUid, scores[i], signatures[i]);
             if (signer == address(0)) continue;
             if (!registry.isActiveOracle(signer)) continue;
@@ -215,17 +233,10 @@ contract PilotEscrow is Ownable {
     }
 
     function _recoverFromStructHash(bytes32 structHash, bytes memory signature) internal view returns (address) {
-        if (signature.length != 65) return address(0);
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
-        bytes32 r; bytes32 s; uint8 v;
-        assembly {
-            r := mload(add(signature, 32))
-            s := mload(add(signature, 64))
-            v := byte(0, mload(add(signature, 96)))
-        }
-        if (v < 27) v += 27;
-        if (uint256(s) > 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0) return address(0);
-        return ecrecover(digest, v, r, s);
+        (address recovered, ECDSA.RecoverError error, ) = ECDSA.tryRecover(digest, signature);
+        if (error != ECDSA.RecoverError.NoError) return address(0);
+        return recovered;
     }
 
     // === Median ===

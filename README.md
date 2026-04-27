@@ -109,6 +109,7 @@ The active `TitheManager` is the worldview-agnostic version. The older Christian
 
 - Docker Compose starts Redis, the ML service, and the node runtime.
 - `aggregator/worker.js` can run in `USE_TEST_PAYLOAD=true` mode until real payload fetching is production-ready.
+- `aggregator/p2p.js` elects the aggregate transaction submitter from the current score-signer set and rotates to the next score signer after `P2P_LEADER_TIMEOUT_MS`.
 - `dashboard/index.html` is a static local dashboard.
 - Use a dedicated low-balance hot wallet for node operation. Never use a primary wallet or cold-storage key in `.env`.
 

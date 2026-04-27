@@ -6,7 +6,6 @@ const VERSION = "1.0.1";
 const VENOM_REGISTRY_ADDRESS = process.env.VENOM_REGISTRY_ADDRESS;
 const REQUIRED_ENV = [
   "RPC_URL",
-  "DEPLOYER_PRIVATE_KEY",
   "VENOM_REGISTRY_ADDRESS",
   "PILOT_ESCROW_ADDRESS"
 ];
@@ -17,9 +16,19 @@ let workerHandle = null;
 
 function validateEnv() {
   const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
+  if (!getOperatorPrivateKey()) {
+    missing.push("OPERATOR_PRIVATE_KEY");
+  }
   if (missing.length) {
     throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
   }
+  if (process.env.USE_TEST_PAYLOAD === "true" && process.env.NODE_ENV === "production") {
+    throw new Error("USE_TEST_PAYLOAD=true is not allowed with NODE_ENV=production");
+  }
+}
+
+function getOperatorPrivateKey() {
+  return process.env.OPERATOR_PRIVATE_KEY || process.env.BROADCASTER_PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
 }
 
 async function shutdown(signal) {
@@ -42,14 +51,14 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 async function main() {
   validateEnv();
-  const { startP2PNode } = require('./aggregator/p2p');
+  const { startP2PNode, refreshActiveOracles } = require('./aggregator/p2p');
   const { startProducer } = require('./aggregator/producer');
   const { startWorker } = require('./aggregator/worker');
 
   console.log(`Starting VENOM Node v${VERSION}...`);
 
   const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-  const wallet = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, provider);
+  const wallet = new ethers.Wallet(getOperatorPrivateKey(), provider);
 
   const registry = new ethers.Contract(VENOM_REGISTRY_ADDRESS, [
     "function isActiveOracle(address) view returns (bool)",
@@ -74,6 +83,7 @@ async function main() {
 
     const tx = await registry.registerOracle(multiaddrStr, { value: stakeAmount });
     await tx.wait();
+    await refreshActiveOracles();
 
     console.log(`Registered with real multiaddr: ${multiaddrStr}`);
   } else {

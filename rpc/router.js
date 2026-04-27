@@ -12,8 +12,8 @@ class MultiRpcProvider {
     this.maxRetries = options.maxRetries || 3;
     this.timeout = options.timeout || 15000; // 15 seconds
 
-    // Create initial provider
-    this.provider = this._createProvider(this.urls[0]);
+    this.providers = this.urls.map((url) => this._createProvider(url));
+    this.provider = this.providers[0];
     
     console.log(`[MultiRPC] Initialized with ${urls.length} providers`);
   }
@@ -27,6 +27,7 @@ class MultiRpcProvider {
 
   _getNextUrl() {
     this.currentIndex = (this.currentIndex + 1) % this.urls.length;
+    this.provider = this.providers[this.currentIndex];
     return this.urls[this.currentIndex];
   }
 
@@ -36,7 +37,7 @@ class MultiRpcProvider {
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
         const url = this.urls[this.currentIndex];
-        const provider = this._createProvider(url);
+        const provider = this.providers[this.currentIndex];
 
         // Add timeout protection
         const result = await Promise.race([

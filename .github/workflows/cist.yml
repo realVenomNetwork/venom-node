@@ -1,0 +1,45 @@
+name: CIST Smoke Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  cist-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run unit test suite
+        run: npm test
+
+      - name: Run CIST fixture smoke test
+        run: npm run pilot:smoke-test -- --json
+        env:
+          CI: true
+
+      - name: Sweep CIST artifacts for redaction
+        id: redaction_sweep
+        if: always()
+        run: |
+          node -e "const fs=require('node:fs');const path=require('node:path');const { assertContentIsSafe }=require('./scripts/pilot/cist/redaction');const root=path.resolve('tmp/smoke-test');if(!fs.existsSync(root)){process.exit(0);}const walk=(dir)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const full=path.join(dir,entry.name);if(entry.isDirectory()){walk(full);continue;}if(entry.isFile()){assertContentIsSafe(fs.readFileSync(full,'utf8'),{source:full});}}};walk(root);"
+
+      - name: Upload CIST artifacts
+        if: always() && steps.redaction_sweep.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cist-report-${{ github.run_number }}
+          path: tmp/smoke-test/
+          retention-days: 7
+          if-no-files-found: warn

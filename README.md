@@ -56,6 +56,24 @@ docker compose up -d --build
 
 Redis and the ML service are bound to `127.0.0.1` by default, not exposed on all host interfaces.
 
+## Component Integration Smoke Test
+
+The CIST v1.1 harness exercises the fixture-mode lifecycle from config preflight through report teardown.
+
+Run it from the repo root:
+
+```bash
+npm run pilot:smoke-test
+```
+
+Relevant files:
+
+- [scripts/pilot/smoke-test.js](scripts/pilot/smoke-test.js) is the CLI entrypoint.
+- [scripts/pilot/cist/report.js](scripts/pilot/cist/report.js) builds `report.json` and `report.md`.
+- [tmp/smoke-test/latest.txt](tmp/smoke-test/latest.txt) records the latest run ID in this checkout.
+
+Fixture mode accepts `--scenario=all-agree`, `--scenario=mixed`, and `--scenario=with-abstain`; in v1.1 they all execute the same fixture path and produce the same overall PASS result.
+
 ## Quick Architecture Overview
 
 ```mermaid

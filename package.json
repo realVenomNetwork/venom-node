@@ -12,6 +12,7 @@
     "lint:js": "node scripts/check-js.js",
     "coverage": "hardhat coverage",
     "audit:prod": "npm audit --omit=dev --audit-level=critical",
+    "pilot:smoke-test": "node scripts/pilot/smoke-test.js",
     "deploy:phase4": "hardhat run scripts/deploy_phase4.js --network base-sepolia",
     "deploy:tithe": "hardhat run scripts/governance/deploy_tithing.cjs --network base-sepolia",
     "demo:governance": "hardhat run scripts/governance/demo-full-flow.js --network hardhat",

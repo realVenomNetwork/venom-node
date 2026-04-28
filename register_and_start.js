@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 require('dotenv').config({ quiet: true });
 const { ethers } = require('ethers');
+const { assertRuntimeModeConfig, describeRuntimeMode } = require('./src/config/runtime-mode');
 
 const VERSION = "1.0.1";
 const VENOM_REGISTRY_ADDRESS = process.env.VENOM_REGISTRY_ADDRESS;
@@ -13,17 +14,17 @@ const REQUIRED_ENV = [
 let p2pNode = null;
 let producerHandle = null;
 let workerHandle = null;
+let runtimeModeConfig = null;
 
 function validateEnv() {
+  runtimeModeConfig = assertRuntimeModeConfig(process.env);
+
   const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
   if (!getOperatorPrivateKey()) {
     missing.push("OPERATOR_PRIVATE_KEY");
   }
   if (missing.length) {
     throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
-  }
-  if (process.env.USE_TEST_PAYLOAD === "true" && process.env.NODE_ENV === "production") {
-    throw new Error("USE_TEST_PAYLOAD=true is not allowed with NODE_ENV=production");
   }
 }
 
@@ -56,6 +57,7 @@ async function main() {
   const { startWorker } = require('./aggregator/worker');
 
   console.log(`Starting VENOM Node v${VERSION}...`);
+  console.log(`Runtime guardrails: ${describeRuntimeMode(runtimeModeConfig)}`);
 
   const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
   const wallet = new ethers.Wallet(getOperatorPrivateKey(), provider);

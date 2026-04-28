@@ -21,6 +21,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Check roadmap guardrails
+        run: npm run roadmap:check
+
       - name: Run unit test suite
         run: npm test
 

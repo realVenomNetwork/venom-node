@@ -8,6 +8,8 @@ const path = require('path');
 const MultiRpcProvider = require('../rpc/router');
 const { publishSignature, publishAbstain } = require('./p2p');
 const TEST_PAYLOAD = require('../data/fixtures/good-payload.json');
+const { assertRuntimeModeConfig } = require('../src/config/runtime-mode');
+const { recordDashboardEvent } = require('../src/dashboard/quorum-replay');
 
 const rootEnvPath = path.join(__dirname, "../.env");
 require("dotenv").config({ path: rootEnvPath, quiet: true });
@@ -100,9 +102,7 @@ function getAbstainReasonCode(reason) {
 }
 
 function assertTestPayloadAllowed() {
-  if (process.env.USE_TEST_PAYLOAD === "true" && process.env.NODE_ENV === "production") {
-    throw new Error("USE_TEST_PAYLOAD is not allowed when NODE_ENV=production");
-  }
+  assertRuntimeModeConfig(process.env);
 }
 
 function getProcessedCampaignKey(campaignUid) {
@@ -233,6 +233,16 @@ async function publishSignedAbstain(campaignUid, reason) {
   };
   const reasonCode = getAbstainReasonCode(reason);
   const signature = await wallet.signTypedData(domain, types, { campaignUid, reason: reasonCode });
+  recordDashboardEvent({
+    type: "local_abstain",
+    campaignUid,
+    source: "worker",
+    signer: wallet.address,
+    reasonCode,
+    message: `This node produced a signed abstain: ${reason}.`
+  }).catch((error) => {
+    console.warn(`[Dashboard] Failed to record local abstain: ${error.message}`);
+  });
   await publishAbstain(campaignUid, reasonCode, signature, reason);
 }
 
@@ -247,6 +257,16 @@ async function publishSignedScore(campaignUid, scoreInt) {
     ],
   };
   const signature = await wallet.signTypedData(domain, types, { campaignUid, score: scoreInt });
+  recordDashboardEvent({
+    type: "local_score",
+    campaignUid,
+    source: "worker",
+    signer: wallet.address,
+    score: scoreInt,
+    message: `This node produced a signed score: ${scoreInt}.`
+  }).catch((error) => {
+    console.warn(`[Dashboard] Failed to record local score: ${error.message}`);
+  });
   await publishSignature(campaignUid, scoreInt, signature);
 }
 

@@ -4,9 +4,19 @@ services:
     container_name: venom-redis
     ports:
       - "127.0.0.1:6379:6379"
+    environment:
+      - DASHBOARD_REDIS_PASSWORD=venom_dash_dev_password
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    command:
+      - sh
+      - -c
+      - |
+        cat > /tmp/users.acl <<EOF
+        user default on nopass ~* &* +@all
+        user venom_dash on >venom_dash_dev_password ~* &* -@all +ping +info +client +get +mget +scan +ttl +type +subscribe +psubscribe +unsubscribe +punsubscribe
+        EOF
+        redis-server --appendonly yes --aclfile /tmp/users.acl
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -44,6 +54,8 @@ services:
         required: false
     environment:
       - NODE_ENV=production
+      - VENOM_RUNTIME_MODE=testnet
+      - USE_TEST_PAYLOAD=false
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - ML_SERVICE_URL=http://ml-service:8000/evaluate
@@ -54,6 +66,32 @@ services:
         condition: service_healthy
     restart: unless-stopped
     command: ["node", "register_and_start.js"]
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: venom-dashboard
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - NODE_ENV=production
+      - VENOM_RUNTIME_MODE=testnet
+      - USE_TEST_PAYLOAD=false
+      - DASHBOARD_HOST=127.0.0.1
+      - DASHBOARD_PORT=8787
+      - DASHBOARD_REDIS_HOST=redis
+      - DASHBOARD_REDIS_PORT=6379
+      - DASHBOARD_REDIS_USERNAME=venom_dash
+      - DASHBOARD_REDIS_PASSWORD=venom_dash_dev_password
+    ports:
+      - "127.0.0.1:8787:8787"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    command: ["node", "dashboard/server.js"]
 
 volumes:
   redis_data:

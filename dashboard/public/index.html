@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VENOM Oracle Hearth</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111111;
+      --panel: #1b1d1f;
+      --panel-2: #24272a;
+      --border: #3a3f44;
+      --text: #f2f2ee;
+      --muted: #a7acae;
+      --line: #5c646a;
+      --teal: #48d1bd;
+      --green: #87d37c;
+      --amber: #e5b95f;
+      --red: #e06c75;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      letter-spacing: 0;
+    }
+
+    button, input {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      color: var(--text);
+      background: #25292c;
+      padding: 8px 10px;
+      cursor: pointer;
+      border-radius: 6px;
+      min-height: 38px;
+    }
+
+    button:hover { border-color: var(--teal); }
+
+    .shell {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 22px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.1;
+      font-weight: 720;
+    }
+
+    .brand p, .small {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .banner-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .banner {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .banner strong { color: var(--text); }
+    .banner.demo { border-color: var(--amber); color: var(--amber); }
+    .banner.test { border-color: var(--red); color: var(--red); }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .section {
+      padding: 16px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section:last-child { border-bottom: 0; }
+
+    .section h2 {
+      margin: 0 0 12px;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .tile, .lantern, .replay-surface {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .tile {
+      padding: 14px;
+      min-height: 116px;
+    }
+
+    .tile .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .tile .value {
+      font-size: 18px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .tile .detail {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 10px;
+      line-height: 1.4;
+    }
+
+    .sidebar {
+      min-width: 0;
+    }
+
+    .lantern-list {
+      display: grid;
+      gap: 8px;
+      max-height: 670px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .lantern {
+      width: 100%;
+      text-align: left;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      background: var(--panel);
+    }
+
+    .lantern.active { border-color: var(--teal); }
+
+    .lantern-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .uid {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+
+    .pill {
+      flex: 0 0 auto;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 8px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .pill.observed { color: var(--teal); border-color: var(--teal); }
+    .pill.decided { color: var(--amber); border-color: var(--amber); }
+    .pill.ready { color: var(--green); border-color: var(--green); }
+    .pill.logged { color: var(--green); border-color: var(--green); }
+    .pill.stale { color: var(--muted); }
+
+    .replay-surface {
+      min-height: 520px;
+      padding: 16px;
+      overflow: hidden;
+    }
+
+    .replay-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .disclaimer {
+      border-left: 3px solid var(--amber);
+      padding: 10px 12px;
+      background: #242016;
+      color: #f0d490;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+
+    .timeline {
+      position: relative;
+      display: grid;
+      gap: 10px;
+      padding-left: 18px;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 5px;
+      top: 4px;
+      bottom: 4px;
+      width: 2px;
+      background: var(--line);
+    }
+
+    .event {
+      position: relative;
+      opacity: 0.34;
+      transform: translateY(4px);
+      transition: opacity 180ms ease, transform 180ms ease, border-color 180ms ease;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+      padding: 10px 12px;
+    }
+
+    .event::before {
+      content: "";
+      position: absolute;
+      left: -17px;
+      top: 14px;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--line);
+    }
+
+    .event.live {
+      opacity: 1;
+      transform: translateY(0);
+      border-color: var(--teal);
+    }
+
+    .event.live::before { background: var(--teal); }
+
+    .event-title {
+      font-weight: 700;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .event-meta {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+      line-height: 1.45;
+    }
+
+    .feed {
+      max-height: 260px;
+      overflow: auto;
+      display: grid;
+      gap: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .empty {
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      padding: 18px;
+      text-align: center;
+      font-size: 13px;
+    }
+
+    @media (max-width: 900px) {
+      .layout, .grid { grid-template-columns: 1fr; }
+      .topbar { flex-direction: column; }
+      .replay-surface { min-height: 420px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <h1>VENOM Oracle Hearth</h1>
+        <p>Node-local dashboard for heartbeat, lanterns, postcards, and UI-only quorum replay.</p>
+        <div id="banners" class="banner-row"></div>
+      </div>
+      <button id="refresh">Refresh</button>
+    </header>
+
+    <section class="section">
+      <h2>Network Heartbeat</h2>
+      <div class="grid">
+        <div class="tile">
+          <div class="label">Local</div>
+          <div id="local-value" class="value">Loading</div>
+          <div id="local-detail" class="detail"></div>
+        </div>
+        <div class="tile">
+          <div class="label">On-chain</div>
+          <div id="chain-value" class="value">Loading</div>
+          <div id="chain-detail" class="detail"></div>
+        </div>
+        <div class="tile">
+          <div class="label">P2P mesh</div>
+          <div id="mesh-value" class="value">Loading</div>
+          <div id="mesh-detail" class="detail"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>System Health</h2>
+      <div class="grid">
+        <div class="tile">
+          <div class="label">Mode</div>
+          <div id="mode-value" class="value">Loading</div>
+          <div id="mode-detail" class="detail"></div>
+        </div>
+        <div class="tile">
+          <div class="label">Latest Postcard</div>
+          <div id="postcard-value" class="value">None observed</div>
+          <div id="postcard-detail" class="detail"></div>
+        </div>
+        <div class="tile">
+          <div class="label">Live Events</div>
+          <div id="events-value" class="value">Connecting</div>
+          <div id="events-detail" class="detail">Server-Sent Events</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="layout">
+      <aside class="sidebar section">
+        <h2>Campaign Lanterns</h2>
+        <div id="lanterns" class="lantern-list"></div>
+      </aside>
+
+      <section class="section">
+        <div class="replay-surface">
+          <div class="replay-header">
+            <div>
+              <h2>Quorum Replay</h2>
+              <p id="selected-campaign" class="small">No campaign selected</p>
+            </div>
+            <button id="replay-button" disabled>Replay</button>
+          </div>
+          <div class="disclaimer">Reconstructed from this node's local observations only. Replay is UI-only and does not delay, execute, or resubmit any network action.</div>
+          <div id="timeline" class="timeline">
+            <div class="empty">Select a lantern to view reconstructed local events.</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <section class="section">
+      <h2>Live Local Feed</h2>
+      <div id="feed" class="feed"></div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      campaigns: [],
+      selectedCampaign: null,
+      replay: null,
+      replayTimers: [],
+      eventCount: 0
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function shortUid(uid) {
+      if (!uid) return "unknown";
+      return `${uid.slice(0, 10)}...${uid.slice(-8)}`;
+    }
+
+    function stateClass(label) {
+      const value = String(label || "").toLowerCase();
+      if (value.includes("observed")) return "observed";
+      if (value.includes("decided")) return "decided";
+      if (value.includes("ready")) return "ready";
+      if (value.includes("logged")) return "logged";
+      return "stale";
+    }
+
+    function addFeed(message) {
+      state.eventCount += 1;
+      $("events-value").textContent = String(state.eventCount);
+      const line = document.createElement("div");
+      line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      $("feed").prepend(line);
+      while ($("feed").children.length > 40) $("feed").lastChild.remove();
+    }
+
+    function renderBanners(status) {
+      const runtime = status.runtime || {};
+      const banners = $("banners");
+      banners.innerHTML = "";
+
+      const mode = document.createElement("div");
+      mode.className = "banner";
+      mode.innerHTML = `<strong>Mode</strong> ${runtime.mode || "unknown"}`;
+      banners.appendChild(mode);
+
+      const scope = document.createElement("div");
+      scope.className = "banner";
+      scope.innerHTML = "<strong>Scope</strong> node-local observations only";
+      banners.appendChild(scope);
+
+      if (runtime.use_test_payload) {
+        const test = document.createElement("div");
+        test.className = "banner test";
+        test.innerHTML = "<strong>TEST PAYLOAD</strong> demo-only artifacts required";
+        banners.appendChild(test);
+      }
+
+      if (runtime.mode === "demo") {
+        const demo = document.createElement("div");
+        demo.className = "banner demo";
+        demo.innerHTML = "<strong>DEMO</strong> not real judgment";
+        banners.appendChild(demo);
+      }
+    }
+
+    function renderStatus(status) {
+      const heartbeat = status.heartbeat || {};
+      const local = heartbeat.local || {};
+      const chain = heartbeat.on_chain || {};
+      const mesh = heartbeat.p2p_mesh || {};
+      const runtime = status.runtime || {};
+      const postcard = status.latest_postcard;
+
+      renderBanners(status);
+      $("local-value").textContent = `Redis ${local.redis || "unknown"}`;
+      $("local-detail").textContent = `Dashboard ${local.dashboard || "unknown"} · ${local.snapshots || 0} snapshots · ${local.scope || "local_observation"}`;
+      $("chain-value").textContent = `Registry ${chain.registry || "unknown"}`;
+      $("chain-detail").textContent = `Escrow ${chain.escrow || "unknown"} · ${chain.source || "local configuration"}`;
+      $("mesh-value").textContent = mesh.state || "unknown";
+      $("mesh-detail").textContent = `${mesh.observed_oracles || 0} observed signer addresses · ${mesh.source || "local snapshots"}`;
+      $("mode-value").textContent = runtime.mode || "unknown";
+      $("mode-detail").textContent = `USE_TEST_PAYLOAD=${Boolean(runtime.use_test_payload)} · ${runtime.artifact_directory || ""}`;
+
+      if (postcard) {
+        $("postcard-value").textContent = shortUid(postcard.campaign_uid);
+        $("postcard-detail").textContent = `${postcard.runtime_mode || "unknown"} · ${postcard.generated_at || "no timestamp"}`;
+      } else {
+        $("postcard-value").textContent = "None observed";
+        $("postcard-detail").textContent = runtime.postcard_directory || "";
+      }
+    }
+
+    function renderLanterns() {
+      const root = $("lanterns");
+      root.innerHTML = "";
+
+      if (!state.campaigns.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No node-local campaign snapshots yet.";
+        root.appendChild(empty);
+        return;
+      }
+
+      for (const campaign of state.campaigns) {
+        const button = document.createElement("button");
+        const lantern = campaign.lantern || {};
+        button.className = `lantern ${state.selectedCampaign === campaign.campaign_uid ? "active" : ""}`;
+        button.innerHTML = `
+          <div class="lantern-head">
+            <span class="uid">${shortUid(campaign.campaign_uid)}</span>
+            <span class="pill ${stateClass(lantern.state)}">${lantern.state || "Stale"}</span>
+          </div>
+          <div class="small">${campaign.event_count || 0} local events · ${lantern.score_observations || 0} scores · ${lantern.abstain_observations || 0} abstains</div>
+        `;
+        button.addEventListener("click", () => selectCampaign(campaign.campaign_uid));
+        root.appendChild(button);
+      }
+    }
+
+    function eventTitle(type) {
+      return String(type || "event").replaceAll("_", " ");
+    }
+
+    function renderReplay(resetLive = true) {
+      const root = $("timeline");
+      root.innerHTML = "";
+
+      if (!state.replay || !state.replay.events.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No replay events in this node's current snapshot.";
+        root.appendChild(empty);
+        return;
+      }
+
+      for (const event of state.replay.events) {
+        const div = document.createElement("div");
+        div.className = "event";
+        div.dataset.eventId = event.id;
+        div.innerHTML = `
+          <div class="event-title">${eventTitle(event.type)}</div>
+          <div class="event-meta">${event.message || "local observation"}<br>${event.observed_at || ""}${event.signer ? `<br>signer: ${event.signer}` : ""}${event.transaction_hash ? `<br>tx: ${event.transaction_hash}` : ""}</div>
+        `;
+        if (!resetLive) div.classList.add("live");
+        root.appendChild(div);
+      }
+    }
+
+    function clearReplayTimers() {
+      for (const timer of state.replayTimers) clearTimeout(timer);
+      state.replayTimers = [];
+    }
+
+    function playReplay() {
+      clearReplayTimers();
+      renderReplay(true);
+      if (!state.replay) return;
+
+      for (const event of state.replay.events) {
+        const timer = setTimeout(() => {
+          const el = document.querySelector(`[data-event-id="${event.id}"]`);
+          if (el) el.classList.add("live");
+        }, event.replay_offset_ms || 0);
+        state.replayTimers.push(timer);
+      }
+    }
+
+    async function selectCampaign(uid) {
+      state.selectedCampaign = uid;
+      $("selected-campaign").textContent = uid;
+      $("replay-button").disabled = false;
+      renderLanterns();
+
+      const response = await fetch(`/api/campaigns/${encodeURIComponent(uid)}/replay?durationMs=45000`, { cache: "no-store" });
+      state.replay = await response.json();
+      renderReplay(false);
+    }
+
+    async function refresh() {
+      const [statusResponse, campaignsResponse] = await Promise.all([
+        fetch("/api/status", { cache: "no-store" }),
+        fetch("/api/campaigns", { cache: "no-store" })
+      ]);
+      renderStatus(await statusResponse.json());
+      const campaigns = await campaignsResponse.json();
+      state.campaigns = campaigns.campaigns || [];
+      renderLanterns();
+    }
+
+    function connectEvents() {
+      const events = new EventSource("/events");
+      events.addEventListener("hello", () => {
+        $("events-value").textContent = "0";
+        addFeed("Connected to local dashboard event stream.");
+      });
+      events.addEventListener("dashboard-event", (message) => {
+        const data = JSON.parse(message.data);
+        if (data.event) addFeed(`${eventTitle(data.event.type)} · ${shortUid(data.event.campaign_uid)}`);
+        refresh().catch((error) => addFeed(`refresh failed: ${error.message}`));
+      });
+      events.addEventListener("status", (message) => {
+        renderStatus(JSON.parse(message.data));
+      });
+      events.onerror = () => {
+        $("events-detail").textContent = "SSE reconnecting";
+      };
+    }
+
+    $("refresh").addEventListener("click", () => refresh().catch((error) => addFeed(error.message)));
+    $("replay-button").addEventListener("click", playReplay);
+
+    refresh().catch((error) => addFeed(error.message));
+    connectEvents();
+  </script>
+</body>
+</html>

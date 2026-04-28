@@ -1,0 +1,96 @@
+{
+  "version": "vocabulary.v1.6.1",
+  "roadmap_version": "roadmap.v1.6.1",
+  "terms": [
+    {
+      "id": "local_observation",
+      "canonical": "Local Observation",
+      "definition": "What this node saw, including its own measurements and peer messages observed by this node.",
+      "trust_boundary": "node-local"
+    },
+    {
+      "id": "on_chain_state",
+      "canonical": "On-chain State",
+      "definition": "State read from a blockchain contract or event log through the configured RPC provider.",
+      "trust_boundary": "chain-derived"
+    },
+    {
+      "id": "hypothetical_simulation",
+      "canonical": "Hypothetical Simulation",
+      "definition": "A modeled or replayed scenario that is not presented as observed network state or on-chain fact.",
+      "trust_boundary": "simulation"
+    },
+    {
+      "id": "runtime_mode",
+      "canonical": "Runtime Mode",
+      "definition": "The explicit VENOM_RUNTIME_MODE value that controls artifact isolation and startup guardrails.",
+      "trust_boundary": "configuration"
+    },
+    {
+      "id": "test_payload",
+      "canonical": "Test Payload",
+      "definition": "A fixture payload enabled by USE_TEST_PAYLOAD=true for development or demo workflows.",
+      "trust_boundary": "fixture"
+    },
+    {
+      "id": "demo_artifact",
+      "canonical": "Demo Artifact",
+      "definition": "An artifact created under demo mode and marked so it cannot be mistaken for real judgment.",
+      "trust_boundary": "demo-only"
+    },
+    {
+      "id": "mainnet_artifact",
+      "canonical": "Mainnet Artifact",
+      "definition": "An artifact created while VENOM_RUNTIME_MODE=mainnet with real payload handling only.",
+      "trust_boundary": "mainnet"
+    },
+    {
+      "id": "testnet_artifact",
+      "canonical": "Testnet Artifact",
+      "definition": "An artifact created while VENOM_RUNTIME_MODE=testnet.",
+      "trust_boundary": "testnet"
+    },
+    {
+      "id": "operator_card",
+      "canonical": "Operator Card",
+      "definition": "A local operator setup card stored at ~/.venom/operator-card.md; it records configuration, not reputation.",
+      "trust_boundary": "local-only"
+    },
+    {
+      "id": "campaign_postcard",
+      "canonical": "Campaign Postcard",
+      "definition": "A local field note written only after this node observes closeCampaign succeed on-chain.",
+      "trust_boundary": "local-artifact"
+    },
+    {
+      "id": "judgment_capsule",
+      "canonical": "Judgment Capsule",
+      "definition": "A concise block explaining the observed scoring or abstention outcome and its limits.",
+      "trust_boundary": "artifact-copy"
+    },
+    {
+      "id": "economic_disclosure",
+      "canonical": "Economic Disclosure",
+      "definition": "A required artifact block stating current operator payment limitations and incentives.",
+      "trust_boundary": "artifact-copy"
+    },
+    {
+      "id": "dashboard_isolation",
+      "canonical": "Dashboard Isolation",
+      "definition": "Dashboard access is separate-process, localhost-only, read-only against Redis, and short-lived.",
+      "trust_boundary": "dashboard"
+    },
+    {
+      "id": "redis_read_only_role",
+      "canonical": "Redis Read-only Role",
+      "definition": "A Redis ACL identity for dashboard reads that must fail a startup SET sentinel check.",
+      "trust_boundary": "dashboard"
+    },
+    {
+      "id": "careful_witness",
+      "canonical": "careful witness",
+      "definition": "Product-language anchor phrase locked to one README use outside this vocabulary file.",
+      "trust_boundary": "copy"
+    }
+  ]
+}

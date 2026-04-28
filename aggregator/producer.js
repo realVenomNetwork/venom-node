@@ -3,6 +3,7 @@ const { getCampaignQueue, getConnection } = require('./queue');
 const { ethers } = require('ethers');
 const MultiRpcProvider = require('../rpc/router');
 const path = require('path');
+const { recordDashboardEvent } = require('../src/dashboard/quorum-replay');
 
 const rootEnvPath = path.join(__dirname, "../.env");
 require("dotenv").config({ path: rootEnvPath, quiet: true });
@@ -80,6 +81,14 @@ async function discoverAndQueueNewCampaigns() {
         jobId: uid,
         removeOnComplete: true,
         removeOnFail: 100
+      });
+      recordDashboardEvent({
+        type: "campaign_observed",
+        campaignUid: uid,
+        source: "producer",
+        message: "CampaignFunded observed by this node."
+      }).catch((error) => {
+        console.warn(`[Dashboard] Failed to record campaign observation: ${error.message}`);
       });
       console.log(`  -> Queued campaign: ${uid}`);
     }

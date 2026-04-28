@@ -1,5 +1,7 @@
 # VENOM Node
 
+VENOM Node is a careful witness for decentralized ML-gated oracle work: it separates local observations, on-chain state, and simulations before presenting operator-facing artifacts.
+
 Decentralized ML-gated oracle node with governance, council, and charitable redirection modules in one project root.
 
 ## Status
@@ -46,6 +48,7 @@ npm install
 cp .env.example .env
 npm run compile
 npm test
+npm run roadmap:check
 ```
 
 For the full local node stack:
@@ -93,6 +96,8 @@ flowchart LR
 
 ```bash
 npm run start
+npm run venom -- status
+npm run doctor
 npm run compile
 npm test
 npm run coverage

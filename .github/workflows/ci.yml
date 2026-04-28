@@ -29,6 +29,9 @@ jobs:
       - name: Check JavaScript syntax
         run: npm run lint:js
 
+      - name: Check roadmap guardrails
+        run: npm run roadmap:check
+
       - name: Run tests
         run: npm test
 

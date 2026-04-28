@@ -2,6 +2,8 @@
 // Libp2p gossip aggregation for signed score and abstain messages.
 
 const { ethers } = require('ethers');
+const { generatePostcardFromCloseReceipt } = require('../src/postcard');
+const { recordDashboardEvent } = require('../src/dashboard/quorum-replay');
 
 const REQUIRED_ORACLES = 5;
 const SCORE_QUORUM_PCT = 50;
@@ -246,6 +248,12 @@ function quorumMet(entry) {
   );
 }
 
+function medianScore(scores) {
+  if (!Array.isArray(scores) || scores.length === 0) return null;
+  const sorted = [...scores].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
 function errorText(error) {
   return [
     error?.message,
@@ -306,12 +314,32 @@ async function handleSignatureMessage(evt) {
       entry.abstainSignatures.push(signature);
       entry.abstainReasons.push(reasonCode);
       entry.abstainSigners.push(signer);
+      recordDashboardEvent({
+        type: "abstain_observed",
+        campaignUid,
+        source: "p2p",
+        signer,
+        reasonCode,
+        message: "Abstain signature observed by this node."
+      }).catch((error) => {
+        console.warn(`[Dashboard] Failed to record abstain observation: ${error.message}`);
+      });
       console.log(`[P2P] Received ABSTAIN for ${campaignUid} (${entry.abstainSigners.length} abstains)`);
     } else {
       if (entry.signers.includes(signer)) return;
       entry.scores.push(scoreNumber);
       entry.signatures.push(signature);
       entry.signers.push(signer);
+      recordDashboardEvent({
+        type: "score_observed",
+        campaignUid,
+        source: "p2p",
+        signer,
+        score: scoreNumber,
+        message: "Score signature observed by this node."
+      }).catch((error) => {
+        console.warn(`[Dashboard] Failed to record score observation: ${error.message}`);
+      });
       console.log(`[P2P] Received SCORE for ${campaignUid} (${entry.signers.length}/${REQUIRED_ORACLES})`);
     }
 
@@ -319,6 +347,14 @@ async function handleSignatureMessage(evt) {
     if (quorumMet(entry)) {
       if (entry.quorumReachedAt === null) {
         entry.quorumReachedAt = Date.now();
+        recordDashboardEvent({
+          type: "quorum_reached",
+          campaignUid,
+          source: "p2p",
+          message: "This node observed enough local peer messages to mark quorum reached."
+        }).catch((error) => {
+          console.warn(`[Dashboard] Failed to record quorum observation: ${error.message}`);
+        });
         console.log(`[P2P] Quorum reached for ${campaignUid} (round 0 leader: ${leaderForRound(campaignUid, entry.signers, 0)})`);
       }
 
@@ -338,6 +374,15 @@ async function submitAggregatedTransaction(campaignUid, entry) {
     if (!pilotEscrowAddress) throw new Error("Missing PILOT_ESCROW_ADDRESS");
 
     console.log(`[P2P] Submitting closeCampaign for ${campaignUid} with ${entry.signers.length} scores + ${entry.abstainSigners.length} abstains...`);
+    recordDashboardEvent({
+      type: "close_submitted",
+      campaignUid,
+      source: "p2p",
+      submitter: myWallet.address,
+      message: "This node submitted closeCampaign."
+    }).catch((error) => {
+      console.warn(`[Dashboard] Failed to record close submission: ${error.message}`);
+    });
 
     const pilotEscrow = new ethers.Contract(pilotEscrowAddress, [
       "function closeCampaign(bytes32,uint256[],bytes[],uint8[],bytes[]) external"
@@ -353,6 +398,47 @@ async function submitAggregatedTransaction(campaignUid, entry) {
 
     const receipt = await tx.wait();
     console.log(`SUCCESS: Campaign closed in block ${receipt.blockNumber}`);
+    recordDashboardEvent({
+      type: "close_observed",
+      campaignUid,
+      source: "p2p",
+      submitter: myWallet.address,
+      transactionHash: receipt.hash || receipt.transactionHash,
+      blockNumber: Number(receipt.blockNumber),
+      message: "This node observed closeCampaign succeed on-chain."
+    }).catch((error) => {
+      console.warn(`[Dashboard] Failed to record close observation: ${error.message}`);
+    });
+    try {
+      const postcardResult = await generatePostcardFromCloseReceipt({
+        campaignUid,
+        receipt,
+        submitter: myWallet.address,
+        localOperator: myWallet.address,
+        closeObservation: {
+          contract_address: pilotEscrowAddress
+        },
+        judgmentCapsule: {
+          summary: "This node submitted closeCampaign and observed the successful on-chain receipt.",
+          median_score: medianScore(entry.scores),
+          score_count: entry.signers.length,
+          abstain_count: entry.abstainSigners.length
+        }
+      });
+      await recordDashboardEvent({
+        type: "postcard_logged",
+        campaignUid,
+        source: "postcard",
+        submitter: myWallet.address,
+        transactionHash: receipt.hash || receipt.transactionHash,
+        blockNumber: Number(receipt.blockNumber),
+        postcardPaths: postcardResult.paths,
+        message: "Campaign Postcard v1 was written locally."
+      });
+      console.log(`[P2P] Wrote Campaign Postcard v1 for ${campaignUid}`);
+    } catch (postcardError) {
+      console.warn(`[P2P] Campaign closed, but postcard was not written: ${postcardError.message}`);
+    }
     return true;
   } catch (err) {
     console.error(`Submission failed for ${campaignUid}:`, err.message);

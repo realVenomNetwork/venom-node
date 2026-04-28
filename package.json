@@ -4,8 +4,19 @@
   "private": true,
   "description": "Decentralized ML-gated oracle network with governance and charitable redirection modules",
   "main": "register_and_start.js",
+  "bin": {
+    "venom": "./cli/venom.js"
+  },
   "scripts": {
     "start": "node register_and_start.js",
+    "venom": "node cli/venom.js",
+    "doctor": "node cli/venom.js doctor",
+    "init": "node cli/venom.js init",
+    "status": "node cli/venom.js status",
+    "venom:card": "node cli/venom.js card",
+    "venom:postcard": "node cli/venom.js postcard",
+    "roadmap:check": "node scripts/roadmap-check.js",
+    "dashboard": "node dashboard/server.js",
     "dev": "nodemon register_and_start.js",
     "compile": "hardhat compile",
     "test": "hardhat test",
@@ -13,6 +24,7 @@
     "coverage": "hardhat coverage",
     "audit:prod": "npm audit --omit=dev --audit-level=critical",
     "pilot:smoke-test": "node scripts/pilot/smoke-test.js",
+    "demo:pilot": "node scripts/pilot/smoke-test.js --scenario=all-agree",
     "deploy:phase4": "hardhat run scripts/deploy_phase4.js --network base-sepolia",
     "deploy:tithe": "hardhat run scripts/governance/deploy_tithing.cjs --network base-sepolia",
     "demo:governance": "hardhat run scripts/governance/demo-full-flow.js --network hardhat",

@@ -20,7 +20,7 @@ The implementation is anchored by runtime-mode guardrails, a canonical vocabular
 Explicit `VENOM_RUNTIME_MODE` + `USE_TEST_PAYLOAD` validation with startup refusal for invalid combinations (e.g. `mainnet` + test payload). Artifact directories are derived by mode, creating a clear trust boundary for all operator-facing artifacts.
 
 **Mechanically enforced roadmap checks**  
-`roadmap:check` now enforces vocabulary presence, runtime-mode matrix, Redis ACL sentinel behavior, controlled use of the “careful witness” product phrase, postcard immutability, `submitter` field, on-chain close marker, `schema_version: "postcard.v1"`, and `scope: "local_observation"`.
+`roadmap:check` now enforces vocabulary presence, runtime-mode matrix, Redis ACL sentinel behavior, the locked README-only product phrase rule, postcard immutability, `submitter` field, on-chain close marker, `schema_version: "postcard.v1"`, and `scope: "local_observation"`.
 
 **Canonical vocabulary**  
 Versioned `vocabulary/vocabulary.json` with terms such as Local Observation, On-chain State, Hypothetical Simulation, Runtime Mode, and Test Payload, each assigned explicit trust boundaries (`node-local`, `chain-derived`, `simulation`, `configuration`).

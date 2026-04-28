@@ -1,10 +1,11 @@
 // aggregator/nonceManager.js
-const { connection } = require('./queue');
+const { getConnection } = require('./queue');
 const { ethers } = require('ethers');
 
 const NONCE_KEY = 'venom:deployer:nonce';
 
 async function initializeNonce(deployerAddress) {
+  const connection = getConnection();
   const currentNonce = await connection.get(NONCE_KEY);
   if (currentNonce !== null) {
     console.log(`[Nonce] Using existing nonce from Redis: ${currentNonce}`);
@@ -22,6 +23,7 @@ async function initializeNonce(deployerAddress) {
 }
 
 async function getNextNonce() {
+  const connection = getConnection();
   // Atomic increment — guarantees unique nonce even with 100+ workers
   const newNonce = await connection.incr(NONCE_KEY);
   // incr returns the value after incrementing, so we subtract 1 to get the actual sequential nonce

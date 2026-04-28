@@ -59,14 +59,16 @@ async function loadLibp2pModules() {
     tcpPkg,
     noisePkg,
     mplexPkg,
-    multiaddrPkg
+    multiaddrPkg,
+    identifyPkg
   ] = await Promise.all([
     import('libp2p'),
     import('@chainsafe/libp2p-gossipsub'),
     import('@libp2p/tcp'),
     import('@chainsafe/libp2p-noise'),
     import('@libp2p/mplex'),
-    import('@multiformats/multiaddr')
+    import('@multiformats/multiaddr'),
+    import('@libp2p/identify')
   ]);
 
   libp2pModules = {
@@ -75,7 +77,8 @@ async function loadLibp2pModules() {
     tcp: tcpPkg.tcp,
     noise: noisePkg.noise,
     mplex: mplexPkg.mplex,
-    multiaddr: multiaddrPkg.multiaddr
+    multiaddr: multiaddrPkg.multiaddr,
+    identify: identifyPkg.identify
   };
   return libp2pModules;
 }
@@ -88,7 +91,7 @@ async function startP2PNode(wallet) {
   const pilotEscrowAddress = process.env.PILOT_ESCROW_ADDRESS;
   if (!pilotEscrowAddress) throw new Error("Missing PILOT_ESCROW_ADDRESS");
 
-  const { createLibp2p, gossipsub, tcp, noise, mplex, multiaddr } = await loadLibp2pModules();
+  const { createLibp2p, gossipsub, tcp, noise, mplex, multiaddr, identify } = await loadLibp2pModules();
 
   const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
   const network = await provider.getNetwork();
@@ -109,7 +112,10 @@ async function startP2PNode(wallet) {
     transports: [tcp()],
     connectionEncrypters: [noise()],
     streamMuxers: [mplex()],
-    services: { pubsub: gossipsub({ allowPublishToZeroPeers: true }) }
+    services: {
+      identify: identify(),
+      pubsub: gossipsub({ allowPublishToZeroPeers: true })
+    }
   });
 
   myPeerId = libp2p.peerId.toString();

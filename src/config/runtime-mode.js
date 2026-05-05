@@ -49,8 +49,8 @@ function validateRuntimeModeConfig(env = process.env) {
     errors.push(testPayload.error);
   }
 
-  if (runtimeMode === "mainnet" && testPayload.value === true) {
-    errors.push(`${RUNTIME_MODE_ENV}=mainnet cannot run with ${TEST_PAYLOAD_ENV}=true.`);
+  if ((runtimeMode === "mainnet" || runtimeMode === "testnet") && testPayload.value === true) {
+    errors.push(`${RUNTIME_MODE_ENV}=${runtimeMode} cannot run with ${TEST_PAYLOAD_ENV}=true.`);
   }
 
   const artifactRoot = env.VENOM_ARTIFACT_ROOT || DEFAULT_ARTIFACT_ROOT;

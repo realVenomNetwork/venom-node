@@ -2,32 +2,7 @@
 
 This document consolidates the report items that were not fully taken in the current pass. It is intended as the working reference for future hardening iterations.
 
-Source reports reviewed:
-
-- `qwen.txt`
-- `minimax.txt`
-- `kimi.txt`
-- `meta.txt`
-- `mistral.txt`
-- `ling-2.6-flash-free-report.md`
-- `big-pickle-report.md`
-- `nemotron-3-super-free-venom-node-report.md`
-- `claude.txt`
-- `gemini.txt`
-- `grok.txt`
-- `deepseek.txt`
-- `grok2.txt`
-- `gemini2.txt`
-- `claude2.txt`
-- `gemini3.txt`
-- `claude3.txt`
-- `claude4.txt`
-- `gemini4.txt`
-- `gemini5.txt`
-- `claude5.txt`
-- `claude-suggestion/PATCH_NOTES.md`
-- `claude6.txt`
-- `gemini6.txt`
+Source reports reviewed: Multiple internal review reports across iterative review rounds.
 
 ## Applied In This Pass
 
@@ -67,7 +42,7 @@ Source reports reviewed:
 - Decide insurance pool governance: who can withdraw, under what policy, and with what timelock.
 - Make protocol constants configurable within bounded ranges where testnet tuning is expected: minimum stake, slash percent, max deviation, quorum parameters, and timeout.
 - Move governance owners to `Ownable2Step`, transfer ownership to a multisig, and add timelocks for rate, recipient, threshold, and registry changes.
-- Gate `CouncilRegistry.attestTrust` and `CreedValidator.attestNode` by active-oracle status or stake weight to avoid permissionless sybil attestations.
+- Gate `CouncilRegistry.attestTrust` by active-oracle status or stake weight to avoid permissionless sybil attestations.
 - Wire `ConsentManager` and `TitheManager` into the escrow payment path only after the consent subject, rate source, event model, and pull-payment flow are specified.
 - Add operator bounty payment semantics. The current `PilotEscrow` returns bounty to the funder-designated recipient.
 - Consider custom errors for gas and richer revert context.

@@ -94,13 +94,13 @@ function checkRuntimeModeMatrix() {
 
   const validCases = [
     { VENOM_RUNTIME_MODE: "mainnet", USE_TEST_PAYLOAD: "false" },
-    { VENOM_RUNTIME_MODE: "testnet", USE_TEST_PAYLOAD: "true" },
     { VENOM_RUNTIME_MODE: "testnet", USE_TEST_PAYLOAD: "false" },
     { VENOM_RUNTIME_MODE: "demo", USE_TEST_PAYLOAD: "true" },
     { VENOM_RUNTIME_MODE: "demo", USE_TEST_PAYLOAD: "false" }
   ];
   const invalidCases = [
     { VENOM_RUNTIME_MODE: "mainnet", USE_TEST_PAYLOAD: "true" },
+    { VENOM_RUNTIME_MODE: "testnet", USE_TEST_PAYLOAD: "true" },
     { VENOM_RUNTIME_MODE: "demo" },
     { USE_TEST_PAYLOAD: "false" },
     { VENOM_RUNTIME_MODE: "production", USE_TEST_PAYLOAD: "false" }

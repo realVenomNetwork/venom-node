@@ -1,148 +1,109 @@
 # VENOM Node
 
-VENOM Node is a careful witness for decentralized ML-gated oracle work: it separates local observations, on-chain state, and simulations before presenting operator-facing artifacts.
-
-Decentralized ML-gated oracle node with governance, council, and charitable redirection modules in one project root.
+A pre-testnet decentralized ML-gated oracle network — a careful witness for the boundary between local observation, on-chain state, and simulation. The stack consists of Solidity contracts targeting Base Sepolia, a Node.js aggregator with libp2p gossip, a Python FastAPI ML scoring service, BullMQ + Redis for job queuing, and an optional static dashboard.
 
 ## Status
 
-This is a Base Sepolia testnet project. The contracts are unaudited and should not be used with mainnet funds. The current node still supports a controlled test payload mode while v1.1 real payload fetching is being finished.
+**Pre-testnet release candidate. Not audited. Not production-ready. Active development.**
 
-Current economic limitations:
+The codebase has been through internal review rounds and has regression test coverage for known critical paths, but contracts are not deployed on public testnet and the project has not received external security review. Do not deploy with real funds. Do not rely on this for any consequential decision.
 
-- `VenomRegistry.MIN_STAKE` is `1 ETH` on testnet.
-- `VenomRegistry.SLASH_PERCENT` is currently `5`.
-- `PilotEscrow.fundCampaign()` records the funder as the current campaign recipient, so `closeCampaign()` returns the campaign bounty to that address. Operator bounty payouts are not implemented in the active contract yet.
-- Oracle unstaking is not implemented. Slashed stake is tracked in `slashedStakeReserve` and can be withdrawn by the registry owner; remaining active stake stays locked until an unstake flow is added.
+Key economic parameters:
 
-## Consolidated Layout
+- `VenomRegistry.MIN_STAKE` is 1 ETH (testnet).
+- `VenomRegistry.SLASH_PERCENT` is 5%.
+- `PilotEscrow.fundCampaign()` records the funder as the campaign recipient, so `closeCampaign()` returns the bounty to that address. Operator bounty payouts are not yet implemented.
+- Oracle unstaking is implemented with a 7-day cooldown; slashed stake is tracked in `slashedStakeReserve` and can be withdrawn by the registry owner.
 
-This repository folds the previous side folders into one active project:
+## Architecture
 
-- `venom-node` -> runtime node, aggregator, contracts, dashboard, ML service, tests, and Docker setup.
-- `venom-council` -> `contracts/governance`, `scripts/governance`, and `docs/governance`.
-- `venom-tithe` -> faith-specific governance material in `contracts/governance/faith` and `docs/governance`.
+**Contracts** — `PilotEscrow` handles campaign funding, EIP-712 score/abstain signature verification, quorum gates (absolute floor, percentage threshold, participation floor), and campaign close or timeout refund. `VenomRegistry` manages oracle registration with stake, active oracle tracking, deviation-based slashing, and unstake cooldown. Governance contracts (`CouncilRegistry`, `AgreementFactory`, `MinimalMultiSig`, `ConsentManager`, `TitheManager`) are compiled and tested but not yet wired into the active escrow payment path.
 
-```text
-venom-node/
-  aggregator/              Node runtime queue, gossip, and worker logic
-  contracts/               Hardhat contracts
-    PilotEscrow.sol
-    VenomRegistry.sol
-    governance/            Council, agreement, consent, and tithe contracts
-      faith/               Optional faith-specific attestation contracts
-  dashboard/               Static operator dashboard
-  data/prompts/            Small prompt-audit fixtures
-  docs/                    Operator, roadmap, architecture, and governance notes
-  eval_engine/             Python evaluation and audit harnesses
-  ml_service/              FastAPI scoring service
-  rpc/                     RPC/router helpers
-  scripts/                 Deployment and demo scripts
-  test/                    Hardhat tests
-```
+**Aggregator node** — `producer.js` scans on-chain events for new campaigns and queues them in Redis/BullMQ. `worker.js` picks up jobs, fetches payloads, verifies content hashes, scores via the ML service, and produces EIP-712 signatures. `p2p.js` handles libp2p gossip of score and abstain signatures, deterministic leader election, and quorum-gated on-chain submission.
 
-## Quick Start
+**ML service** — `ml_service/main.py` is a FastAPI microservice wrapping the scoring engine. It loads `all-MiniLM-L6-v2` into memory at startup and exposes `/evaluate` for payload scoring. The API key auth and rate limiting are wired through `slowapi`.
+
+**Dashboard** — `dashboard/index.html` is a static local dashboard. It reads from the node's health endpoint and Redis.
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 20+
+- Python 3.11+
+- Docker and Docker Compose
+- Hardhat (installed via `npm ci`)
+
+### Local fixture mode (no testnet funds required)
+
+1. Clone and set up the environment:
 
 ```bash
-npm install
+git clone <repo-url>
+cd venom-node
 cp .env.example .env
-npm run compile
-npm test
-npm run roadmap:check
 ```
 
-For the full local node stack:
+Set `VENOM_RUNTIME_MODE=demo` and `USE_TEST_PAYLOAD=true` in `.env` for safe local operation. `OPERATOR_PRIVATE_KEY` can be left empty for fixture-only work.
+
+2. Install dependencies and run the test suite:
+
+```bash
+npm ci
+npm run compile
+npm test
+```
+
+3. Start the full local stack:
 
 ```bash
 docker compose up -d --build
 ```
 
-Redis and the ML service are bound to `127.0.0.1` by default, not exposed on all host interfaces.
-
-## Component Integration Smoke Test
-
-The CIST v1.1 harness exercises the fixture-mode lifecycle from config preflight through report teardown.
-
-Run it from the repo root:
+4. Run the component integration smoke test:
 
 ```bash
-npm run pilot:smoke-test
+npm run pilot:smoke-test -- --scenario=all-agree
 ```
 
-Relevant files:
+Logs land in `tmp/smoke-test/`. Each run produces `report.json` and `report.md` in a timestamped subdirectory. `tmp/smoke-test/latest.txt` points to the most recent run.
 
-- [scripts/pilot/smoke-test.js](scripts/pilot/smoke-test.js) is the CLI entrypoint.
-- [scripts/pilot/cist/report.js](scripts/pilot/cist/report.js) builds `report.json` and `report.md`.
-- [tmp/smoke-test/latest.txt](tmp/smoke-test/latest.txt) records the latest run ID in this checkout.
+## Known Limitations and Open Work
 
-Fixture mode accepts `--scenario=all-agree`, `--scenario=mixed`, and `--scenario=with-abstain`; in v1.1 they all execute the same fixture path and produce the same overall PASS result.
+- **Real-payload IPFS fetching** is wired but has not been piloted on live testnet.
+- **Slashing surface** is implemented but not yet exercised against adversarial end-to-end scenarios.
+- **`CouncilRegistry.rotateCouncil()`** reverts with "Not implemented" — stub only.
+- **`aggregator/nonceManager.js`** is unused; pending decision to integrate or remove.
+- **`rpc/router.js`** has a minor timer leak on successful calls (non-blocking, low priority).
+- **Governance integration** — `ConsentManager` and `TitheManager` are not yet wired into `PilotEscrow.closeCampaign()`. They are deployable and tested but not active in the payment path.
+- **No external security audit.** The contracts have internal review coverage but no third-party audit.
 
-## Quick Architecture Overview
+## Repository Layout
 
-```mermaid
-flowchart LR
-  PilotEscrow["PilotEscrow<br/>CampaignFunded event"] --> Producer["Producer<br/>event scanner"]
-  Producer --> Redis["Redis / BullMQ<br/>campaign queue + scan cursor"]
-  Redis --> Worker["Worker<br/>fetch + score + sign"]
-  Worker --> ML["ML Service<br/>/evaluate"]
-  Worker --> P2P["Libp2p gossip<br/>score/abstain signatures"]
-  P2P --> Close["closeCampaign()<br/>aggregated transaction"]
-  Close --> PilotEscrow
-  PilotEscrow --> Registry["VenomRegistry<br/>oracle status + slashing"]
-  Governance["Governance contracts<br/>Council / Consent / Tithe"] -. "planned integration" .-> PilotEscrow
+```
+venom-node/
+  aggregator/         Node runtime: producer, worker, p2p gossip, queue
+  cli/                CLI commands (venom binary)
+  contracts/          Solidity: escrow, registry, governance
+  dashboard/          Static operator dashboard
+  data/               Small fixtures for prompt audits
+  docs/               Architecture, roadmap, operator guide, governance notes
+  eval_engine/        Python scoring and calibration tools
+  ml_service/         FastAPI ML scoring microservice
+  rpc/                RPC routing and failover
+  scripts/            Deployment scripts and CIST smoke-test harness
+  src/                Runtime-mode guardrails, postcard schema, operator card utilities
+  test/               Hardhat test suite
 ```
 
-## Common Commands
+## Contributing
 
-```bash
-npm run start
-npm run venom -- status
-npm run doctor
-npm run compile
-npm test
-npm run coverage
-npm run demo:governance
-npm run deploy:phase4
-npm run deploy:tithe
-```
+The maintainer is actively developing this project. External contributions, issues, and forks are welcome. PRs touching consensus logic, slashing, or contract code should include regression tests in `test/`. Run `npm test` and `npm run roadmap:check` before submitting.
 
-`deploy:phase4` and `deploy:tithe` use `base-sepolia` and read `RPC_URL` plus `DEPLOYER_PRIVATE_KEY` from `.env`.
+## License
 
-## Core Contracts
+MIT. See [LICENSE](LICENSE) for details.
 
-- `contracts/VenomRegistry.sol` - oracle registration, active oracle lookup, and slashing reserve accounting.
-- `contracts/PilotEscrow.sol` - campaign funding, EIP-712 score/abstain verification, quorum checks, campaign close/cancel.
+## Acknowledgements
 
-## Governance Layer
-
-The v0.3 governance layer is compiled and tested with the main project:
-
-- `contracts/governance/CouncilRegistry.sol` registers worldview branches, validators, attestations, and top-validator slices.
-- `contracts/governance/AgreementFactory.sol` creates cross-branch `MinimalMultiSig` agreements when top validators have enough attestation overlap.
-- `contracts/governance/MinimalMultiSig.sol` is a small k-of-m wallet for synthetic collaboration entities.
-- `contracts/governance/ConsentManager.sol` stores per-user charitable redirection preferences.
-- `contracts/governance/TitheManager.sol` queues configurable charitable redirection amounts as claimable pull payments for bounded active recipients.
-- `contracts/governance/faith/CreedValidator.sol` is an optional faith-specific attestation module.
-
-`ConsentManager` and `TitheManager` are not yet wired into `PilotEscrow.closeCampaign()`. The intended integration is: read the campaign participant's consent preset, compute an effective charitable redirection rate, route that portion through `TitheManager`, and let recipients claim queued balances. Until that integration lands, they are deployable governance modules exercised by tests and the demo script, not active escrow payment logic.
-
-The active `TitheManager` is the worldview-agnostic version. The older Christian-specific tithe contract is preserved as documentation in `docs/governance/legacy-christian-tithe-manager.sol.txt` so compiler scans cannot pick up two `TitheManager` contracts.
-
-## Runtime Notes
-
-- Docker Compose starts Redis, the ML service, and the node runtime.
-- `aggregator/worker.js` can run in `USE_TEST_PAYLOAD=true` mode until real payload fetching is production-ready.
-- `aggregator/p2p.js` elects the aggregate transaction submitter from the current score-signer set and rotates to the next score signer after `P2P_LEADER_TIMEOUT_MS`.
-- `dashboard/index.html` is a static local dashboard.
-- Use a dedicated low-balance hot wallet for node operation. Never use a primary wallet or cold-storage key in `.env`.
-
-## More Docs
-
-- [Architecture](docs/ARCHITECTURE.md)
-- [Operator Guide](docs/OPERATOR_GUIDE.md)
-- [Roadmap](docs/ROADMAP.md)
-- [Project Structure](docs/PROJECT_STRUCTURE.md)
-- [Governance Notes](docs/governance/council.md)
-- [Escrow/Governance Integration Plan](docs/governance/PILOT_ESCROW_INTEGRATION.md)
-
-Generated folders such as `artifacts`, `cache`, and `node_modules` are ignored.
+Developed with assistance from multiple AI coding tools used as drafting and review aids; all design decisions, integration, and final code review are by the maintainer.

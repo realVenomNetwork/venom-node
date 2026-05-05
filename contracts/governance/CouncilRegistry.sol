@@ -100,10 +100,11 @@ contract CouncilRegistry is Ownable {
 
     // === ROTATING COUNCIL (merit + attestation based) ===
     function rotateCouncil() external onlyOwner {
-        emit CouncilRotated(currentCouncil);
+        revert("Not implemented");
     }
 
     function setCurrentCouncil(address[] calldata newCouncil) external onlyOwner {
+        require(newCouncil.length > 0, "Empty council");
         currentCouncil = newCouncil;
         emit CouncilRotated(newCouncil);
     }

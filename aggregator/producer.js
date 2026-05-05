@@ -9,7 +9,7 @@ const rootEnvPath = path.join(__dirname, "../.env");
 require("dotenv").config({ path: rootEnvPath, quiet: true });
 
 const PilotEscrowABI = [
-  "event CampaignFunded(bytes32 indexed campaignUid, address indexed funder, uint256 amount)"
+  "event CampaignFunded(bytes32 indexed campaignUid, address indexed funder, uint256 amount, string contentUri, bytes32 contentHash)"
 ];
 
 let multiProvider = null;
@@ -18,6 +18,7 @@ let lastScannedBlock = null;
 let producerInterval = null;
 const SCAN_LOOKBACK_BLOCKS = Number(process.env.PRODUCER_SCAN_LOOKBACK_BLOCKS || 200);
 const REORG_LOOKBACK_BLOCKS = Number(process.env.PRODUCER_REORG_LOOKBACK_BLOCKS || 10);
+const CAMPAIGN_QUEUE_TTL = 3600; // 1 hour
 
 function getProducerRuntime() {
   if (multiProvider && pilotEscrow) {
@@ -56,7 +57,7 @@ async function loadLastScannedBlock() {
 
 async function saveLastScannedBlock(blockNumber) {
   lastScannedBlock = blockNumber;
-  await getConnection().set(getCursorKey(), String(blockNumber));
+  await getConnection().set(getCursorKey(), String(blockNumber), 'EX', 86400);
 }
 
 async function discoverAndQueueNewCampaigns() {
@@ -77,11 +78,29 @@ async function discoverAndQueueNewCampaigns() {
 
     for (const event of events) {
       const uid = event.args.campaignUid;
-      await getCampaignQueue().add('process-campaign', { campaignUid: uid }, {
+      const contentUri = event.args.contentUri;
+      const contentHash = event.args.contentHash;
+      const campaignKey = `venom:campaign:queued:${uid.toLowerCase()}`;
+
+      const exists = await getConnection().exists(campaignKey);
+      if (exists) {
+        console.log(`  -> Skipping already queued campaign: ${uid}`);
+        continue;
+      }
+
+      // Queue first (BullMQ jobId:uid provides idempotency), then set cache flag
+      await getCampaignQueue().add('process-campaign', {
+        campaignUid: uid,
+        cid: contentUri,
+        contentHash: contentHash
+      }, {
         jobId: uid,
         removeOnComplete: true,
         removeOnFail: 100
       });
+
+      await getConnection().set(campaignKey, "1", 'EX', CAMPAIGN_QUEUE_TTL);
+
       recordDashboardEvent({
         type: "campaign_observed",
         campaignUid: uid,
@@ -90,7 +109,7 @@ async function discoverAndQueueNewCampaigns() {
       }).catch((error) => {
         console.warn(`[Dashboard] Failed to record campaign observation: ${error.message}`);
       });
-      console.log(`  -> Queued campaign: ${uid}`);
+      console.log(`  -> Queued campaign: ${uid} (cid: ${contentUri || 'none'})`);
     }
 
     await saveLastScannedBlock(toBlock + 1);

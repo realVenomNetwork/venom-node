@@ -51,7 +51,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("1. Score quorum: 4 attacker scores + 6 honest abstains reverts (40% < 50% Quorum)", async function () {
         const uid = ethers.id("Q1");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
 
         const scores = [99, 99, 99, 99];
         const scoreSigs = await signEip712Score(oracles.slice(0, 4), uid, scores, escrow);
@@ -65,7 +65,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("2. Score quorum: 5 attacker scores + 5 honest abstains passes threshold gate (50% >= 50%)", async function () {
         const uid = ethers.id("Q2");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
 
         const scores = [99, 99, 99, 99, 99];
         const scoreSigs = await signEip712Score(oracles.slice(0, 5), uid, scores, escrow);
@@ -80,7 +80,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("3. Participation floor: 5 valid scores + 0 abstains in 10-oracle network reverts (50% < 67% Floor)", async function () {
         const uid = ethers.id("Q3");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
 
         const scores = [70, 70, 70, 70, 70];
         const scoreSigs = await signEip712Score(oracles.slice(0, 5), uid, scores, escrow);
@@ -91,9 +91,9 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("4. Happy path: 6 scores near median + 4 abstains in 10-oracle network closes", async function () {
         const uid = ethers.id("Q4");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
 
-        const scores = [75, 76, 74, 75, 75, 75];
+        const scores = [74, 75, 75, 75, 75, 76];
         const scoreSigs = await signEip712Score(oracles.slice(0, 6), uid, scores, escrow);
         
         const reasons = [0, 1, 2, 0]; 
@@ -106,7 +106,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("5. Score-and-abstain by same oracle: abstain is dropped, score counts", async function () {
         const uid = ethers.id("Q5");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
 
         const scores = [75, 75, 75, 75, 75, 75];
         const scoreSigs = await signEip712Score(oracles.slice(0, 6), uid, scores, escrow);
@@ -123,7 +123,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("5b. Duplicate abstains by one oracle do not inflate participation", async function () {
         const uid = ethers.id("Q5B");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
 
         const scores = [75, 75, 75, 75, 75];
         const scoreSigs = await signEip712Score(oracles.slice(0, 5), uid, scores, escrow);
@@ -137,7 +137,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("6. Cancel before timeout reverts", async function () {
         const uid = ethers.id("C1");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
         await expect(escrow.connect(owner).cancelCampaign(uid))
             .to.be.revertedWith("Timeout not reached");
     });
@@ -145,7 +145,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
     it("7. Cancel after timeout refunds 99% to funder, 1% to insurance pool", async function () {
         const uid = ethers.id("C2");
         const bounty = ethers.parseEther("1.0");
-        await escrow.connect(owner).fundCampaign(uid, { value: bounty });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: bounty });
 
         // Mine 7200 blocks to pass CAMPAIGN_TIMEOUT_BLOCKS
         await ethers.provider.send("hardhat_mine", ["0x1C20"]); 
@@ -168,7 +168,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("8. Cancel by non-funder reverts", async function () {
         const uid = ethers.id("C3");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
         await ethers.provider.send("hardhat_mine", ["0x1C20"]); 
 
         await expect(escrow.connect(attacker).cancelCampaign(uid))
@@ -180,7 +180,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
         const escrowB = await Escrow.deploy(await registry.getAddress());
 
         const uid = ethers.id("R1");
-        await escrowB.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrowB.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
 
         const scores = [70, 70, 70, 70, 70];
         const scoreSigs = await signEip712Score(oracles.slice(0, 5), uid, scores, escrowB);
@@ -197,7 +197,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("10. Rejects high-s malleable score signatures", async function () {
         const uid = ethers.id("R2");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
 
         const scores = [75, 75, 75, 75, 75];
         const scoreSigs = (await signEip712Score(oracles.slice(0, 5), uid, scores, escrow)).map(forceHighS);
@@ -210,7 +210,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("11. Caps caller-provided score arrays to the active oracle count", async function () {
         const uid = ethers.id("CAP1");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
 
         const scoreSigners = [...oracles.slice(0, 10), oracles[0]];
         const scores = Array(11).fill(75);
@@ -222,7 +222,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("12. Ignores signed scores outside the supported 0-100 range", async function () {
         const uid = ethers.id("CAP2");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
 
         const scores = [101, 75, 75, 75, 75];
         const scoreSigs = await signEip712Score(oracles.slice(0, 5), uid, scores, escrow);
@@ -237,11 +237,11 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
         const uid = ethers.id("P1");
         await escrow.pause();
 
-        await expect(escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") }))
+        await expect(escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") }))
             .to.be.revertedWithCustomError(escrow, "EnforcedPause");
 
         await escrow.unpause();
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
         await escrow.pause();
 
         await expect(escrow.closeCampaign(uid, [], [], [], []))
@@ -250,7 +250,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("14. Owner pause also blocks timed-out campaign cancellation", async function () {
         const uid = ethers.id("P2");
-        await escrow.connect(owner).fundCampaign(uid, { value: ethers.parseEther("1.0") });
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
         await ethers.provider.send("hardhat_mine", ["0x1C20"]);
 
         await escrow.pause();

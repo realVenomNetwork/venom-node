@@ -1,6 +1,6 @@
 # Security Policy
 
-VENOM Network contracts are unaudited and testnet-only.
+VENOM Network contracts are unaudited and testnet-only. There is no bug bounty program at this time.
 
 ## Reporting
 

@@ -6,13 +6,19 @@ Keeps the all-MiniLM-L6-v2 model warm in memory
 
 import os
 import sys
+import time
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security, Depends, Request
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, field_validator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+from slowapi.middleware import SlowAPIMiddleware
 import uvicorn
 
 # Add project root to path so we can import v51_scoring
@@ -33,6 +39,21 @@ logging.basicConfig(
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger("venom.ml_service")
+
+# API Key authentication
+API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+limiter = Limiter(key_func=get_remote_address)
+
+async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
+    expected_key = os.getenv("ML_SERVICE_API_KEY")
+    if not expected_key:
+        return api_key
+    if not api_key or api_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    return api_key
+
+async def optional_verify_api_key(api_key: str = Security(API_KEY_HEADER)):
+    return api_key
 
 # ============================================
 # Pydantic Schemas (must match Node.js daemon expectations)
@@ -76,15 +97,15 @@ class EvaluateResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 [ML Service] Starting up...")
+    print("Starting [ML Service] startup...")
     print(f"   Loading semantic model: {SEMANTIC_MODEL_NAME}")
-    
+
     # Load model into global state (this is the key optimization)
     app.state.semantic_model = build_semantic_scorer()
-    
-    print("✅ [ML Service] Model loaded successfully and kept warm in memory.")
+
+    print("OK [ML Service] Model loaded successfully and kept warm in memory.")
     yield
-    print("🛑 [ML Service] Shutting down...")
+    print("Stopping [ML Service] shutdown...")
 
 
 # ============================================
@@ -98,9 +119,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Wire slowapi rate limiter into the app
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
-@app.get("/health")
-async def health_check():
+
+@app.get("/health", dependencies=[Depends(optional_verify_api_key)])
+@limiter.limit("30/minute")
+async def health_check(request: Request):
     return {
         "status": "healthy",
         "model_loaded": hasattr(app.state, "semantic_model"),
@@ -108,15 +135,18 @@ async def health_check():
     }
 
 
-@app.post("/evaluate", response_model=EvaluateResponse)
-async def evaluate(request: EvaluateRequest):
+@app.post("/evaluate", response_model=EvaluateResponse, dependencies=[Depends(verify_api_key)], tags=["evaluation"])
+@limiter.limit("10/minute")
+async def evaluate(request: Request, evaluate_request: EvaluateRequest):
     try:
+        start_time = time.time()
         # Use the pre-loaded model from lifespan
         result = score_for_attack_c(
-            payload=request.payload,
-            reference_answer=request.reference_answer,
+            payload=evaluate_request.payload,
+            reference_answer=evaluate_request.reference_answer,
             model=getattr(app.state, "semantic_model", None)
         )
+        elapsed = time.time() - start_time
 
         return EvaluateResponse(
             final_score=result["final_score"],
@@ -125,13 +155,30 @@ async def evaluate(request: EvaluateRequest):
             deterministic_score=result.get("deterministic_score", 0.0),
             diagnostics={
                 "reasons": result.get("reasons", []),
-                "cliff_triggered": result.get("cliff_triggered", False)
+                "cliff_triggered": result.get("cliff_triggered", False),
+                "processing_time_ms": int(elapsed * 1000)
             },
         )
 
-    except Exception:
+    except HTTPException:
+        raise
+    except Exception as e:
         logger.exception("Scoring failed")
-        raise HTTPException(status_code=500, detail="Scoring failed")
+        raise HTTPException(status_code=500, detail={
+            "error": "Scoring failed",
+            "message": str(e) if os.getenv("DEBUG") else "Internal error"
+        })
+
+
+@app.get("/metrics")
+@limiter.limit("30/minute")
+async def metrics(request: Request):
+    """Basic metrics endpoint for monitoring"""
+    return {
+        "model_loaded": hasattr(app.state, "semantic_model"),
+        "model_name": SEMANTIC_MODEL_NAME,
+        "status": "operational"
+    }
 
 
 # ============================================

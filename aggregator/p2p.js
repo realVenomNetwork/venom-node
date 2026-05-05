@@ -5,14 +5,17 @@ const { ethers } = require('ethers');
 const { generatePostcardFromCloseReceipt } = require('../src/postcard');
 const { recordDashboardEvent } = require('../src/dashboard/quorum-replay');
 
-const REQUIRED_ORACLES = 5;
-const SCORE_QUORUM_PCT = 50;
-const PARTICIPATION_FLOOR_PCT = 67;
+let REQUIRED_ORACLES = 5;
+let SCORE_QUORUM_PCT = 50;
+let PARTICIPATION_FLOOR_PCT = 67;
 const TOPIC = 'venom:signatures';
 const PENDING_CAMPAIGN_TTL_MS = Number(process.env.P2P_PENDING_CAMPAIGN_TTL_MS || 4 * 60 * 60 * 1000);
 const PENDING_CAMPAIGN_GC_MS = Number(process.env.P2P_PENDING_CAMPAIGN_GC_MS || 60 * 1000);
 const MAX_PENDING_CAMPAIGNS = Number(process.env.P2P_MAX_PENDING_CAMPAIGNS || 1000);
 const LEADER_TIMEOUT_MS = Number(process.env.P2P_LEADER_TIMEOUT_MS || 15 * 1000);
+const MAX_MESSAGE_AGE_MS = Number(process.env.P2P_MAX_MESSAGE_AGE_MS || 5 * 60 * 1000);
+const MAX_MESSAGES_PER_WINDOW = Number(process.env.P2P_MAX_MESSAGES_PER_WINDOW || 100);
+const RATE_WINDOW_MS = Number(process.env.P2P_RATE_WINDOW_MS || 10000);
 
 let libp2p;
 let libp2pModules;
@@ -26,6 +29,9 @@ let myPeerId;
 let myWallet;
 let eip712Domain;
 let registryContract;
+let pilotEscrowContract;
+const locallyClosedCampaigns = new Set();
+const peerRateLimits = new Map();
 
 const SCORE_TYPES = {
   Score: [
@@ -50,6 +56,34 @@ const ABSTAIN_REASON_CODES = Object.freeze({
   MissingPayload: 8
 });
 
+function isRateLimited(peerId) {
+  const now = Date.now();
+  let entry = peerRateLimits.get(peerId);
+  if (!entry || now > entry.resetTime) {
+    entry = { count: 0, resetTime: now + RATE_WINDOW_MS };
+    peerRateLimits.set(peerId, entry);
+  }
+  entry.count++;
+  return entry.count > MAX_MESSAGES_PER_WINDOW;
+}
+
+function cleanupRateLimiter() {
+  const now = Date.now();
+  for (const [peerId, entry] of peerRateLimits.entries()) {
+    if (now > entry.resetTime) {
+      peerRateLimits.delete(peerId);
+    }
+  }
+}
+
+function isCampaignLocallyClosed(campaignUid) {
+  return locallyClosedCampaigns.has(campaignUid.toLowerCase());
+}
+
+function markCampaignLocallyClosed(campaignUid) {
+  locallyClosedCampaigns.add(campaignUid.toLowerCase());
+}
+
 async function loadLibp2pModules() {
   if (libp2pModules) return libp2pModules;
 
@@ -58,7 +92,7 @@ async function loadLibp2pModules() {
     gossipsubPkg,
     tcpPkg,
     noisePkg,
-    mplexPkg,
+    yamuxPkg,
     multiaddrPkg,
     identifyPkg
   ] = await Promise.all([
@@ -66,7 +100,7 @@ async function loadLibp2pModules() {
     import('@chainsafe/libp2p-gossipsub'),
     import('@libp2p/tcp'),
     import('@chainsafe/libp2p-noise'),
-    import('@libp2p/mplex'),
+    import('@chainsafe/libp2p-yamux'),
     import('@multiformats/multiaddr'),
     import('@libp2p/identify')
   ]);
@@ -76,11 +110,28 @@ async function loadLibp2pModules() {
     gossipsub: gossipsubPkg.gossipsub,
     tcp: tcpPkg.tcp,
     noise: noisePkg.noise,
-    mplex: mplexPkg.mplex,
+    yamux: yamuxPkg.yamux,
     multiaddr: multiaddrPkg.multiaddr,
     identify: identifyPkg.identify
   };
   return libp2pModules;
+}
+
+async function loadQuorumConstants() {
+  if (!pilotEscrowContract) return;
+  try {
+    const [reqOracles, scoreQuorum, participationFloor] = await Promise.all([
+      pilotEscrowContract.REQUIRED_ORACLES(),
+      pilotEscrowContract.SCORE_QUORUM_PCT(),
+      pilotEscrowContract.PARTICIPATION_FLOOR_PCT()
+    ]);
+    REQUIRED_ORACLES = Number(reqOracles);
+    SCORE_QUORUM_PCT = Number(scoreQuorum);
+    PARTICIPATION_FLOOR_PCT = Number(participationFloor);
+    console.log(`[P2P] Loaded quorum constants from contract: REQUIRED_ORACLES=${REQUIRED_ORACLES}, SCORE_QUORUM_PCT=${SCORE_QUORUM_PCT}, PARTICIPATION_FLOOR_PCT=${PARTICIPATION_FLOOR_PCT}`);
+  } catch (err) {
+    console.warn(`[P2P] Failed to load quorum constants from contract, using defaults: ${err.message}`);
+  }
 }
 
 async function startP2PNode(wallet) {
@@ -91,7 +142,7 @@ async function startP2PNode(wallet) {
   const pilotEscrowAddress = process.env.PILOT_ESCROW_ADDRESS;
   if (!pilotEscrowAddress) throw new Error("Missing PILOT_ESCROW_ADDRESS");
 
-  const { createLibp2p, gossipsub, tcp, noise, mplex, multiaddr, identify } = await loadLibp2pModules();
+  const { createLibp2p, gossipsub, tcp, noise, yamux, multiaddr, identify } = await loadLibp2pModules();
 
   const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
   const network = await provider.getNetwork();
@@ -104,14 +155,21 @@ async function startP2PNode(wallet) {
   registryContract = new ethers.Contract(registryAddress, [
     "function getActiveOracles() view returns (address[] operators, string[] multiaddrs)"
   ], provider);
+  pilotEscrowContract = new ethers.Contract(pilotEscrowAddress, [
+    "function REQUIRED_ORACLES() view returns (uint256)",
+    "function SCORE_QUORUM_PCT() view returns (uint256)",
+    "function PARTICIPATION_FLOOR_PCT() view returns (uint256)"
+  ], provider);
 
-  const { multiaddrs } = await refreshActiveOracles();
+  await loadQuorumConstants();
+
+  const { operators, multiaddrs } = await refreshActiveOracles();
 
   libp2p = await createLibp2p({
     addresses: { listen: ['/ip4/0.0.0.0/tcp/0'] },
     transports: [tcp()],
     connectionEncrypters: [noise()],
-    streamMuxers: [mplex()],
+    streamMuxers: [yamux()],
     services: {
       identify: identify(),
       pubsub: gossipsub({ allowPublishToZeroPeers: true })
@@ -163,12 +221,37 @@ async function startP2PNode(wallet) {
   return libp2p;
 }
 
+async function ensurePeersConnected(multiaddrs) {
+  if (!libp2p) return;
+  const connectedAddrs = new Set();
+  for (const conn of libp2p.connections.values()) {
+    for (const addr of conn.remoteAddr.toString().split(',')) {
+      connectedAddrs.add(addr);
+    }
+  }
+
+  for (const addr of multiaddrs) {
+    if (addr && addr.length > 0 && !connectedAddrs.has(addr)) {
+      try {
+        await libp2p.dial(multiaddr(addr));
+        console.log(`[P2P] Re-connected to peer: ${addr}`);
+      } catch (err) {
+        console.warn(`[P2P] Failed to re-dial ${addr}: ${err.message}`);
+      }
+    }
+  }
+}
+
 async function refreshActiveOracles() {
   if (!registryContract) throw new Error("P2P registry contract not initialized");
   const [operators, multiaddrs] = await registryContract.getActiveOracles();
   activeOracleCount = Math.max(operators.length, 1);
   activeOracleAddresses = new Set(operators.map((operator) => operator.toLowerCase()));
   console.log(`[P2P] Found ${operators.length} active oracles on-chain`);
+
+  await ensurePeersConnected(multiaddrs);
+  await loadQuorumConstants();
+
   return { operators, multiaddrs };
 }
 
@@ -233,10 +316,11 @@ function getOrCreatePendingCampaign(campaignUid) {
 
 function leaderForRound(campaignUid, scoreSigners, round = 0) {
   if (!Array.isArray(scoreSigners) || scoreSigners.length === 0) return null;
-  const sorted = [...scoreSigners].map((signer) => signer.toLowerCase()).sort();
-  const seed = ethers.keccak256(ethers.concat([campaignUid, ...sorted]));
-  const base = Number(BigInt(seed) % BigInt(sorted.length));
-  return sorted[(base + round) % sorted.length];
+  const sortedActiveOracles = Array.from(activeOracleAddresses).sort();
+  if (sortedActiveOracles.length === 0) return null;
+  const seed = ethers.keccak256(ethers.concat([campaignUid, ...sortedActiveOracles]));
+  const base = Number(BigInt(seed) % BigInt(sortedActiveOracles.length));
+  return sortedActiveOracles[(base + round) % sortedActiveOracles.length];
 }
 
 function amILeader(campaignUid, scoreSigners, round = 0) {
@@ -277,11 +361,28 @@ function isAlreadyClosedError(error) {
 
 async function handleSignatureMessage(evt) {
   try {
-    const data = JSON.parse(new TextDecoder().decode(evt.detail.data));
+    if (Math.random() < 0.01) cleanupRateLimiter();
+
+    const data = evt.detail.data ? JSON.parse(new TextDecoder().decode(evt.detail.data)) : {};
     const { campaignUid, type = 'score', score, signature, reason } = data;
+    const peerId = data.peerId || 'unknown';
+
     if (!ethers.isHexString(campaignUid, 32) || typeof signature !== "string") {
       console.warn("[P2P] Dropping malformed gossip message");
       return;
+    }
+
+    if (isRateLimited(peerId)) {
+      console.warn(`[P2P] Rate limited peer ${peerId}`);
+      return;
+    }
+
+    if (data.timestamp && typeof data.timestamp === 'number') {
+      const age = Date.now() - data.timestamp;
+      if (age > MAX_MESSAGE_AGE_MS) {
+        console.warn(`[P2P] Dropping stale message for ${campaignUid} from ${peerId}`);
+        return;
+      }
     }
 
     let signer;
@@ -379,6 +480,10 @@ async function submitAggregatedTransaction(campaignUid, entry) {
     const pilotEscrowAddress = process.env.PILOT_ESCROW_ADDRESS;
     if (!pilotEscrowAddress) throw new Error("Missing PILOT_ESCROW_ADDRESS");
 
+    if (isCampaignLocallyClosed(campaignUid)) {
+      return true;
+    }
+
     console.log(`[P2P] Submitting closeCampaign for ${campaignUid} with ${entry.signers.length} scores + ${entry.abstainSigners.length} abstains...`);
     recordDashboardEvent({
       type: "close_submitted",
@@ -394,16 +499,22 @@ async function submitAggregatedTransaction(campaignUid, entry) {
       "function closeCampaign(bytes32,uint256[],bytes[],uint8[],bytes[]) external"
     ], myWallet);
 
+    const combinedScores = entry.scores.map((score, i) => ({ score, signature: entry.signatures[i] }));
+    combinedScores.sort((a, b) => a.score - b.score);
+    const sortedScores = combinedScores.map(c => c.score);
+    const sortedSignatures = combinedScores.map(c => c.signature);
+
     const tx = await pilotEscrow.closeCampaign(
       campaignUid,
-      entry.scores,
-      entry.signatures,
+      sortedScores,
+      sortedSignatures,
       entry.abstainReasons,
       entry.abstainSignatures
     );
 
     const receipt = await tx.wait();
     console.log(`SUCCESS: Campaign closed in block ${receipt.blockNumber}`);
+    markCampaignLocallyClosed(campaignUid);
     recordDashboardEvent({
       type: "close_observed",
       campaignUid,
@@ -448,6 +559,7 @@ async function submitAggregatedTransaction(campaignUid, entry) {
     return true;
   } catch (err) {
     console.error(`Submission failed for ${campaignUid}:`, err.message);
+    locallyClosedCampaigns.delete(campaignUid.toLowerCase());
     return isAlreadyClosedError(err);
   }
 }
@@ -492,6 +604,10 @@ async function checkAndSubmitIfLeader() {
     if (entry.quorumReachedAt === null) continue;
     if (!quorumMet(entry)) continue;
 
+    if (isCampaignLocallyClosed(campaignUid)) {
+      continue;
+    }
+
     const elapsed = now - entry.quorumReachedAt;
     if (elapsed < LEADER_TIMEOUT_MS) continue;
 
@@ -514,5 +630,14 @@ module.exports = {
   leaderForRound,
   quorumMet,
   isAlreadyClosedError,
-  __setActiveOracleCountForTesting: (count) => { activeOracleCount = count; }
+  __setActiveOracleCountForTesting(count) {
+    activeOracleCount = count;
+  },
+  __setActiveOracleAddressesForTesting(addresses) {
+    activeOracleAddresses = new Set(addresses);
+  },
+  __resetForTesting() {
+    activeOracleCount = REQUIRED_ORACLES;
+    activeOracleAddresses = new Set();
+  }
 };

@@ -17,6 +17,7 @@ import "./VenomRegistry.sol";
 contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
     VenomRegistry public immutable registry;
 
+    uint256 private constant MAX_SCORES = 20;
     // === v1.1.0-rc.1 parameters ===
     uint256 public constant REQUIRED_ORACLES = 5;
     uint256 public constant SCORE_QUORUM_PCT = 50;          // BFT majority
@@ -35,7 +36,6 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
         keccak256("Score(bytes32 campaignUid,uint256 score)");
     bytes32 public constant ABSTAIN_TYPEHASH =
         keccak256("Abstain(bytes32 campaignUid,uint8 reason)");
-    bytes32 public immutable DOMAIN_SEPARATOR;
 
     // === Insurance pool: cancel fees + slash residuals accumulate here ===
     uint256 public insurancePool;
@@ -45,11 +45,13 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
         uint256 bounty;
         bool closed;
         uint256 fundedBlock;
+        string contentUri;
+        bytes32 contentHash;
     }
     mapping(bytes32 => Campaign) public campaigns;
 
     /// @notice Emitted when a funder creates a campaign bounty.
-    event CampaignFunded(bytes32 indexed campaignUid, address indexed funder, uint256 amount);
+    event CampaignFunded(bytes32 indexed campaignUid, address indexed funder, uint256 amount, string contentUri, bytes32 contentHash);
     /// @notice Emitted after quorum, median threshold, and transfer all succeed.
     event CampaignClosed(bytes32 indexed campaignUid, address indexed recipient, uint256 bounty, uint256 medianScore);
     /// @notice Emitted when the funder cancels a timed-out campaign.
@@ -60,7 +62,10 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
     constructor(address _registry) Ownable(msg.sender) {
         require(_registry != address(0), "Zero registry");
         registry = VenomRegistry(_registry);
-        DOMAIN_SEPARATOR = keccak256(abi.encode(
+    }
+
+    function domainSeparator() public view returns (bytes32) {
+        return keccak256(abi.encode(
             DOMAIN_TYPEHASH,
             keccak256(bytes(NAME)),
             keccak256(bytes(VERSION)),
@@ -78,7 +83,7 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
     }
 
     /// @notice Fund a new campaign and record the funder as the current recipient.
-    function fundCampaign(bytes32 campaignUid) external payable whenNotPaused nonReentrant {
+    function fundCampaign(bytes32 campaignUid, string calldata _contentUri, bytes32 _contentHash) external payable whenNotPaused nonReentrant {
         require(campaignUid != bytes32(0), "Invalid campaign");
         require(msg.value > 0, "Bounty must be > 0");
         require(campaigns[campaignUid].recipient == address(0), "Campaign already exists");
@@ -86,9 +91,11 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
             recipient: msg.sender,
             bounty: msg.value,
             closed: false,
-            fundedBlock: block.number
+            fundedBlock: block.number,
+            contentUri: _contentUri,
+            contentHash: _contentHash
         });
-        emit CampaignFunded(campaignUid, msg.sender, msg.value);
+        emit CampaignFunded(campaignUid, msg.sender, msg.value, _contentUri, _contentHash);
     }
 
     /// @notice v1.1 close: validates score and abstain sigs separately, applies three-quorum rule.
@@ -101,6 +108,11 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
         bytes[]   calldata abstainSignatures
     ) external whenNotPaused nonReentrant {
         Campaign storage campaign = campaigns[campaignUid];
+
+        require(scores.length <= MAX_SCORES, "Too many scores");
+        require(abstainReasons.length <= MAX_SCORES, "Too many abstains");
+        require(scores.length > 0, "No scores provided");
+
         require(!campaign.closed, "Campaign already closed");
         require(campaign.recipient != address(0), "Campaign not funded");
         require(scores.length == scoreSignatures.length, "Score length mismatch");
@@ -233,7 +245,7 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
     }
 
     function _recoverFromStructHash(bytes32 structHash, bytes memory signature) internal view returns (address) {
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator(), structHash));
         (address recovered, ECDSA.RecoverError error, ) = ECDSA.tryRecover(digest, signature);
         if (error != ECDSA.RecoverError.NoError) return address(0);
         return recovered;
@@ -242,14 +254,21 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
     // === Median ===
 
     function _medianOfCopy(uint256[] memory src, uint256 count) internal pure returns (uint256) {
-        // Bubble sort is acceptable here because REQUIRED_ORACLES keeps the scoring set small.
-        uint256[] memory a = new uint256[](count);
-        for (uint256 i = 0; i < count; i++) a[i] = src[i];
-        for (uint256 i = 0; i < count - 1; i++) {
-            for (uint256 j = 0; j < count - i - 1; j++) {
-                if (a[j] > a[j + 1]) (a[j], a[j + 1]) = (a[j + 1], a[j]);
-            }
+        require(count > 0, "Empty array");
+        require(count <= MAX_SCORES, "Too many scores for median");
+        for (uint256 i = 1; i < count; i++) {
+            require(src[i] >= src[i - 1], "Scores not sorted");
         }
-        return a[count / 2];
+        return src[count / 2];
+    }
+
+    /// @notice Withdraw accumulated insurance pool funds.
+    function withdrawInsurancePool(address payable recipient, uint256 amount) external onlyOwner {
+        require(recipient != address(0), "Zero address");
+        require(amount > 0, "Amount must be positive");
+        require(amount <= insurancePool, "Exceeds insurance pool");
+        insurancePool -= amount;
+        (bool ok,) = recipient.call{value: amount}("");
+        require(ok, "Transfer failed");
     }
 }

@@ -19,3 +19,10 @@ tmp/
 diff-*-export/
 _archive/
 *.log
+.venom-artifacts/
+.vscode/
+.idea/
+python-eggs/
+*.egg-info/
+ml_service/__pycache__/
+eval_engine/__pycache__/

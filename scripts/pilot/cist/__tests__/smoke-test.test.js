@@ -9,6 +9,7 @@ const {
   makeSkeletonPhaseResult,
   makeSkippedPhaseResult,
   runCistPhases,
+  effectiveState,
 } = require('../../smoke-test');
 
 const { STATE, PHASES, validatePhaseResult } = require('../phases');
@@ -537,5 +538,46 @@ describe('CIST smoke-test orchestrator skeleton', function () {
       'PROD_BLOCKER_UNSTAKE_MISSING',
     ]);
     expect(written.result).to.equal('FAIL');
+  });
+});
+
+describe('effectiveState and strict-mode exit code', function () {
+  it('returns the raw state when strict is false', function () {
+    const warnPhase = { state: STATE.WARN };
+    const failPhase = { state: STATE.FAIL };
+    const passPhase = { state: STATE.PASS };
+
+    expect(effectiveState(warnPhase, false)).to.equal(STATE.WARN);
+    expect(effectiveState(failPhase, false)).to.equal(STATE.FAIL);
+    expect(effectiveState(passPhase, false)).to.equal(STATE.PASS);
+  });
+
+  it('promotes WARN to FAIL when strict is true', function () {
+    const warnPhase = { state: STATE.WARN };
+    const failPhase = { state: STATE.FAIL };
+    const passPhase = { state: STATE.PASS };
+
+    expect(effectiveState(warnPhase, true)).to.equal(STATE.FAIL);
+    expect(effectiveState(failPhase, true)).to.equal(STATE.FAIL);
+    expect(effectiveState(passPhase, true)).to.equal(STATE.PASS);
+  });
+
+  it('strict-mode exit code gates on effectiveState, not raw state', function () {
+    const phasesWithWarn = [
+      { state: STATE.PASS },
+      { state: STATE.PASS },
+      { state: STATE.WARN },
+      { state: STATE.SKIP },
+    ];
+
+    const nonStrictFail = phasesWithWarn.some((phase) =>
+      effectiveState(phase, false) === STATE.FAIL
+    );
+    expect(nonStrictFail).to.equal(false);
+
+    const strictFail = phasesWithWarn.some((phase) =>
+      effectiveState(phase, true) === STATE.FAIL
+    );
+    expect(strictFail).to.equal(true);
   });
 });

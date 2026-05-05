@@ -37,7 +37,8 @@ describe('CIST config / RunContext', function () {
       scenario: SCENARIOS.ALL_AGREE,
       explain: false,
       json: false,
-      confirmLiveTestnet: false
+      confirmLiveTestnet: false,
+      strict: false
     });
   });
 

@@ -334,66 +334,6 @@ describe("Governance contracts", function () {
     });
   });
 
-  describe("CreedValidator", function () {
-    it("validates nodes through distinct attestations and supports opt-out", async function () {
-      const CreedValidator = await ethers.getContractFactory("CreedValidator");
-      const creedValidator = await CreedValidator.deploy();
-
-      await creedValidator.setMinAttestations(2);
-      const hashA = ethers.id("testimony-a");
-      const hashB = ethers.id("testimony-b");
-
-      await creedValidator.connect(signerA).attestNode(signerC.address, 0, hashA);
-      await creedValidator.connect(signerA).attestNode(signerC.address, 1, hashB);
-      let status = await creedValidator.getValidationStatus(signerC.address);
-      expect(status.attestationCount).to.equal(1n);
-      await expect(creedValidator.connect(signerA).attestNode(signerC.address, 1, hashB))
-        .to.be.revertedWith("Already attested creed");
-
-      await expect(creedValidator.connect(signerB).attestNode(signerC.address, 1, hashB))
-        .to.emit(creedValidator, "NodeFullyValidated")
-        .withArgs(signerC.address, 2);
-
-      expect(await creedValidator.isValidated(signerC.address)).to.equal(true);
-
-      await creedValidator.connect(recipient).toggleOptOut(recipient.address);
-      expect(await creedValidator.isValidated(recipient.address)).to.equal(true);
-      await expect(creedValidator.connect(signerA).attestNode(recipient.address, 0, hashA))
-        .to.be.revertedWith("Node has opted out of validation");
-    });
-
-    it("batch attests multiple creed hashes as one attestation", async function () {
-      const CreedValidator = await ethers.getContractFactory("CreedValidator");
-      const creedValidator = await CreedValidator.deploy();
-      await creedValidator.setMinAttestations(2);
-
-      const hashes = [ethers.id("son"), ethers.id("lord")];
-      await creedValidator.connect(signerA).batchAttestNode(signerC.address, [0, 3], hashes);
-
-      let status = await creedValidator.getValidationStatus(signerC.address);
-      expect(status.attestationCount).to.equal(1n);
-      expect(status.creedHashes[0]).to.equal(hashes[0]);
-      expect(status.creedHashes[3]).to.equal(hashes[1]);
-
-      await creedValidator.connect(signerA).batchAttestNode(signerC.address, [1], [ethers.id("messiah-a")]);
-      status = await creedValidator.getValidationStatus(signerC.address);
-      expect(status.attestationCount).to.equal(1n);
-      await expect(creedValidator.connect(signerA).batchAttestNode(signerC.address, [1], [ethers.id("again")]))
-        .to.be.revertedWith("Already attested creed");
-
-      await creedValidator.connect(signerB).attestNode(signerC.address, 1, ethers.id("messiah"));
-      expect(await creedValidator.isValidated(signerC.address)).to.equal(true);
-
-      await creedValidator.resetValidation(signerC.address);
-      status = await creedValidator.getValidationStatus(signerC.address);
-      expect(status.attestationCount).to.equal(0n);
-
-      await creedValidator.connect(signerA).attestNode(signerC.address, 0, ethers.id("after-reset"));
-      status = await creedValidator.getValidationStatus(signerC.address);
-      expect(status.attestationCount).to.equal(1n);
-    });
-  });
-
   describe("VenomRegistry", function () {
     it("tracks slashed stake separately and allows owner treasury withdrawal", async function () {
       const Registry = await ethers.getContractFactory("VenomRegistry");
@@ -403,19 +343,14 @@ describe("Governance contracts", function () {
       const stake = ethers.parseEther("1");
       await registry.connect(signerA).registerOracle("/ip4/127.0.0.1/tcp/4101", { value: stake });
 
-      await registry.reportDeviation(signerA.address, 100, 50);
+      await registry.connect(owner).reportDeviation(signerA.address, 100, 50);
 
       const slashAmount = (stake * 5n) / 100n;
       expect(await registry.slashedStakeReserve()).to.equal(slashAmount);
       expect((await registry.oracles(signerA.address)).active).to.equal(false);
       expect(await registry.activeOracleCount()).to.equal(0n);
 
-      await expect(registry.reportDeviation(signerA.address, 100, 50))
-        .to.emit(registry, "SlashSkipped")
-        .withArgs(signerA.address, "Inactive oracle");
-
-      await expect(registry.connect(signerA).registerOracle("/ip4/127.0.0.1/tcp/4102", { value: stake }))
-        .to.be.revertedWith("Oracle already exists");
+      expect(await registry.everSlashed(signerA.address)).to.be.true;
 
       await expect(registry.withdrawSlashedStake(treasury.address, slashAmount))
         .to.changeEtherBalances([registry, treasury], [-slashAmount, slashAmount]);

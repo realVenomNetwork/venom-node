@@ -4,7 +4,9 @@ const {
   leaderForRound,
   quorumMet,
   isAlreadyClosedError,
-  __setActiveOracleCountForTesting
+  __setActiveOracleCountForTesting,
+  __setActiveOracleAddressesForTesting,
+  __resetForTesting
 } = require("../aggregator/p2p");
 
 describe("P2P leader election", function () {
@@ -16,6 +18,16 @@ describe("P2P leader election", function () {
     `0x${"5".repeat(40)}`
   ];
   const UID = ethers.id("campaign-1");
+
+  beforeEach(function () {
+    __resetForTesting();
+    __setActiveOracleAddressesForTesting(SIGNERS.map((s) => s.toLowerCase()));
+    __setActiveOracleCountForTesting(SIGNERS.length);
+  });
+
+  afterEach(function () {
+    __resetForTesting();
+  });
 
   describe("leaderForRound", function () {
     it("returns null for an empty signer set", function () {
@@ -66,6 +78,8 @@ describe("P2P leader election", function () {
 
     it("with one signer always returns that signer", function () {
       const single = [`0x${"a".repeat(40)}`];
+      __setActiveOracleAddressesForTesting(single.map((s) => s.toLowerCase()));
+      __setActiveOracleCountForTesting(1);
       expect(leaderForRound(UID, single, 0)).to.equal(single[0]);
       expect(leaderForRound(UID, single, 999)).to.equal(single[0]);
     });

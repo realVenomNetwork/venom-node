@@ -23,7 +23,8 @@ function parseArgs(argv = []) {
     scenario: SCENARIOS.ALL_AGREE,
     explain: false,
     json: false,
-    confirmLiveTestnet: false
+    confirmLiveTestnet: false,
+    strict: false
   };
 
   for (const arg of argv) {
@@ -33,6 +34,8 @@ function parseArgs(argv = []) {
       options.json = true;
     } else if (arg === '--confirm-live-testnet') {
       options.confirmLiveTestnet = true;
+    } else if (arg === '--strict') {
+      options.strict = true;
     } else if (arg.startsWith('--mode=')) {
       options.mode = arg.slice('--mode='.length);
     } else if (arg.startsWith('--scenario=')) {
@@ -45,7 +48,8 @@ function parseArgs(argv = []) {
           'Supported examples:',
           '  npm run pilot:smoke-test',
           '  npm run pilot:smoke-test -- --scenario=mixed',
-          '  npm run pilot:smoke-test -- --json'
+          '  npm run pilot:smoke-test -- --json',
+          '  npm run pilot:smoke-test -- --strict'
         ]
       );
     }
@@ -120,6 +124,7 @@ function buildRunContext(input = {}) {
     explain: options.explain,
     json: options.json,
     confirmLiveTestnet: options.confirmLiveTestnet,
+    strict: options.strict,
 
     startedAt,
 
@@ -182,6 +187,20 @@ function buildSafetySummary(mode) {
     fixtureKeysAllowed: false,
     line: 'live-testnet may submit transactions and spend testnet ETH.'
   };
+}
+
+function buildStrictRequirements(options) {
+  if (!options.strict) return null;
+
+  const required = [];
+  if (!options.provider) required.push('provider');
+  if (!options.redisClient) required.push('redisClient');
+  if (!options.queue) required.push('queue');
+  if (!options.mlClient) required.push('mlClient');
+  if (!options.payloadSource) required.push('payloadSource');
+  if (!options.worker) required.push('worker');
+
+  return required.length > 0 ? required : null;
 }
 
 function validateRunContext(context) {
@@ -248,6 +267,7 @@ module.exports = {
   buildRunContext,
   buildSafeEnvSummary,
   buildSafetySummary,
+  buildStrictRequirements,
   validateRunContext,
   summarizeRunContextForCli,
   makeConfigError,

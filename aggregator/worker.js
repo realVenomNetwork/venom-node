@@ -21,10 +21,15 @@ const ML_SERVICE_URL = process.env.ML_SERVICE_URL || DEFAULT_ML_SERVICE_URL;
 const IPFS_GATEWAYS = (process.env.IPFS_GATEWAYS || "").split(",").map(g => g.trim()).filter(Boolean);
 const MAX_PAYLOAD_BYTES = parseInt(process.env.MAX_PAYLOAD_BYTES || "51200", 10);
 const FETCH_TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS || "15000", 10);
+const IPFS_CONCURRENT_FETCH = parseInt(process.env.IPFS_CONCURRENT_FETCH || "3", 10);
+const IPFS_GATEWAY_TIMEOUT = parseInt(process.env.IPFS_GATEWAY_TIMEOUT || "8000", 10);
 const ML_TIMEOUT_MS = parseInt(process.env.ML_TIMEOUT_MS || "30000", 10);
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || "4", 10);
 const PROCESSED_CAMPAIGN_TTL_SECONDS = parseInt(process.env.PROCESSED_CAMPAIGN_TTL_SECONDS || "86400", 10);
 const FETCH_FAILURE_PRECEDENCE = ["PayloadTooLarge", "HashMismatch", "NotFound", "Timeout", "FetchFailed"];
+const SCORE_MAX = parseInt(process.env.SCORE_MAX || "100", 10);
+const SCORE_MIN = parseInt(process.env.SCORE_MIN || "0", 10);
+const CID_REGEX = /^(Qm[1-9A-HJ-NP-Za-km-z]{44,}|bafy[A-HJ-NP-Za-km-z]{44,}|bafk[A-HJ-NP-Za-km-z]{44,})$/;
 const ABSTAIN_REASONS = Object.freeze({
   Timeout: 1,
   PayloadTooLarge: 2,
@@ -37,7 +42,7 @@ const ABSTAIN_REASONS = Object.freeze({
 });
 
 const PilotEscrowABI = [
-  "function campaigns(bytes32) view returns (address recipient, uint256 bounty, bool closed, uint256 fundedBlock)"
+  "function campaigns(bytes32) view returns (address recipient, uint256 bounty, bool closed, uint256 fundedBlock, string contentUri, bytes32 contentHash)"
 ];
 
 const DOMAIN = {
@@ -58,7 +63,7 @@ function getWorkerRuntime() {
     throw new Error("Missing PILOT_ESCROW_ADDRESS");
   }
 
-  const operatorKey = process.env.OPERATOR_PRIVATE_KEY || process.env.BROADCASTER_PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
+  const operatorKey = process.env.OPERATOR_PRIVATE_KEY;
   if (!operatorKey) {
     throw new Error("Missing OPERATOR_PRIVATE_KEY in .env");
   }
@@ -130,11 +135,16 @@ async function readLimitedText(response) {
   }
 
   if (!response.body || typeof response.body.getReader !== "function") {
-    const text = await response.text();
-    if (Buffer.byteLength(text, 'utf8') > MAX_PAYLOAD_BYTES) {
-      throw new Error("PayloadTooLarge");
+    let totalBytes = 0;
+    const chunks = [];
+    for await (const chunk of response.body) {
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_PAYLOAD_BYTES) {
+        throw new Error("PayloadTooLarge");
+      }
+      chunks.push(chunk);
     }
-    return text;
+    return Buffer.concat(chunks).toString('utf8');
   }
 
   const reader = response.body.getReader();
@@ -161,48 +171,79 @@ async function readLimitedText(response) {
 async function fetchFromIpfs(cid) {
   if (!IPFS_GATEWAYS.length) throw new Error("No IPFS gateways configured.");
 
+  if (!cid || !CID_REGEX.test(cid)) {
+    throw new Error("Invalid CID format");
+  }
+
   const failures = [];
+  const triedGateways = [];
 
-  for (const gateway of IPFS_GATEWAYS) {
-    const url = `${gateway}/${cid}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    try {
-      const response = await fetch(url, { signal: controller.signal });
-
-      if (!response.ok) {
-        failures.push(response.status === 404 ? "NotFound" : "FetchFailed");
-        continue;
-      }
-
-      const text = await readLimitedText(response);
+  const results = await Promise.allSettled(
+    IPFS_GATEWAYS.map(async (gateway) => {
+      const url = `${gateway}/${cid}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), IPFS_GATEWAY_TIMEOUT);
 
       try {
-        const data = JSON.parse(text);
-        return data.payload ? data : { payload: text, reference_answer: "" };
-      } catch {
-        return { payload: text, reference_answer: "" };
+        triedGateways.push(gateway);
+        const response = await fetch(url, { signal: controller.signal });
+
+        if (!response.ok) {
+          failures.push({ gateway, status: response.status, reason: response.status === 404 ? "NotFound" : "FetchFailed" });
+          return null;
+        }
+
+        const text = await readLimitedText(response);
+
+        try {
+          const data = JSON.parse(text);
+          return data.payload ? data : { payload: text, reference_answer: "" };
+        } catch {
+          return { payload: text, reference_answer: "" };
+        }
+      } catch (err) {
+        if (err.message === "PayloadTooLarge") {
+          throw err;
+        }
+        failures.push({ gateway, reason: err.name === "AbortError" ? "Timeout" : "FetchFailed", error: err.message });
+        return null;
+      } finally {
+        clearTimeout(timeout);
       }
-    } catch (err) {
-      if (err.message === "PayloadTooLarge") throw err;
-      failures.push(err.name === "AbortError" ? "Timeout" : "FetchFailed");
-    } finally {
-      clearTimeout(timeout);
+    })
+  );
+
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].status === 'fulfilled' && results[i].value) {
+      console.log(`[Worker] Successfully fetched from ${triedGateways[i]}`);
+      return results[i].value;
     }
   }
 
-  throw new Error(selectFailureReason(failures));
+  const successfulResult = results.find(r => r.status === 'fulfilled' && r.value);
+  if (!successfulResult) {
+    throw new Error(selectFailureReason(failures.map(f => f.reason)));
+  }
+
+  return successfulResult.value;
+}
+
+function computeContentHash(payload) {
+  return ethers.keccak256(ethers.toUtf8Bytes(payload));
 }
 
 async function scoreWithFastAPI(evalData) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ML_TIMEOUT_MS);
+  const startTime = Date.now();
 
   try {
     const res = await fetch(ML_SERVICE_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": process.env.ML_SERVICE_API_KEY || ""
+      },
       body: JSON.stringify(evalData),
       signal: controller.signal
     });
@@ -211,6 +252,8 @@ async function scoreWithFastAPI(evalData) {
       throw new Error(`ML service returned ${res.status}`);
     }
 
+    console.log(`[Worker] ML service responded in ${Date.now() - startTime}ms`);
+
     const result = await res.json();
     if (typeof result.final_score !== "number" || typeof result.passes_threshold !== "boolean") {
       throw new Error("Invalid ML service response");
@@ -218,6 +261,17 @@ async function scoreWithFastAPI(evalData) {
     return result;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function scoreWithFastAPIWithRetry(evalData, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await scoreWithFastAPI(evalData);
+    } catch (err) {
+      if (i === retries - 1) throw err;
+      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
+    }
   }
 }
 
@@ -272,9 +326,17 @@ async function publishSignedScore(campaignUid, scoreInt) {
 
 async function processCampaign(job) {
   assertTestPayloadAllowed();
-  const { campaignUid, cid } = job.data;
-  const { pilotEscrow } = getWorkerRuntime();
+  const { campaignUid, cid, contentHash } = job.data;
+  const { multiProvider, pilotEscrowAddress } = getWorkerRuntime();
   console.log(`[Worker] Processing ${campaignUid}`);
+
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(campaignUid)) {
+    throw new Error(`Invalid campaignUid format: ${campaignUid}`);
+  }
+
+  // Rebuild contract from current provider to follow RPC failover
+  const provider = multiProvider.getProvider();
+  const pilotEscrow = new ethers.Contract(pilotEscrowAddress, PilotEscrowABI, provider);
 
   try {
     if (await hasProcessedCampaign(campaignUid)) {
@@ -300,6 +362,17 @@ async function processCampaign(job) {
     } else {
       try {
         evalData = await fetchFromIpfs(cid);
+
+        // Verify content hash if provided on-chain
+        if (contentHash && contentHash !== ethers.ZeroHash) {
+          const computedHash = computeContentHash(evalData.payload);
+          if (computedHash.toLowerCase() !== contentHash.toLowerCase()) {
+            console.log(`  -> Content hash mismatch (expected ${contentHash}, got ${computedHash}). Publishing signed abstain.`);
+            await publishSignedAbstain(campaignUid, "HashMismatch");
+            await markCampaignProcessed(campaignUid);
+            return;
+          }
+        }
       } catch (error) {
         const reason = ["Timeout", "PayloadTooLarge", "FetchFailed", "NotFound", "HashMismatch"].includes(error.message)
           ? error.message
@@ -315,7 +388,7 @@ async function processCampaign(job) {
 
     let scoreResult;
     try {
-      scoreResult = await scoreWithFastAPI(evalData);
+      scoreResult = await scoreWithFastAPIWithRetry(evalData);
     } catch (error) {
       console.log(`  -> ML service failed (${error.message}). Publishing signed abstain.`);
       await publishSignedAbstain(campaignUid, "MLServiceFailed");
@@ -331,7 +404,7 @@ async function processCampaign(job) {
     }
 
     const scoreInt = Math.floor(scoreResult.final_score * 100);
-    if (!Number.isInteger(scoreInt) || scoreInt < 0 || scoreInt > 100) {
+    if (!Number.isInteger(scoreInt) || scoreInt < SCORE_MIN || scoreInt > SCORE_MAX) {
       console.warn(`  -> ML score out of range (${scoreResult.final_score}). Publishing signed abstain.`);
       await publishSignedAbstain(campaignUid, "MLServiceFailed");
       await markCampaignProcessed(campaignUid);
@@ -351,10 +424,18 @@ async function startWorker() {
 
   const worker = new Worker(QUEUE_NAME, processCampaign, {
     connection: getConnection(),
-    concurrency: WORKER_CONCURRENCY
+    concurrency: WORKER_CONCURRENCY,
+    attempts: 3,
+    backoff: {
+      type: 'exponential',
+      delay: 2000,
+      maxDelay: 30000
+    },
+    removeOnComplete: { count: 100 },
+    removeOnFail: { count: 200 }
   });
 
-  console.log("Starting VENOM Worker v1.1.0-rc.1 (BullMQ + signed abstention + IPFS fallback)");
+  console.log("Starting VENOM Worker v1.1.0 (BullMQ + signed abstention + IPFS concurrent fallback)");
   console.log(`   Address: ${wallet.address} | Concurrency: ${WORKER_CONCURRENCY} | Gateways: ${IPFS_GATEWAYS.length} | ML: ${ML_SERVICE_URL}\n`);
 
   worker.on('failed', (job, err) => console.error(`Job ${job.id} failed:`, err.message));
@@ -376,5 +457,6 @@ module.exports = {
   getAbstainReasonCode,
   getProcessedCampaignKey,
   readLimitedText,
-  scoreWithFastAPI
+  scoreWithFastAPI,
+  computeContentHash
 };

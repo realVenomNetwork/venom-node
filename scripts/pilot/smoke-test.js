@@ -18,6 +18,7 @@ const { runP2pAggregation } = require('./cist/phases/p2p-aggregation');
 const { runReportTeardown } = require('./cist/phases/report-teardown');
 const {
   buildRunContext,
+  buildStrictRequirements,
   configErrorToText,
 } = require('./cist/config');
 
@@ -43,6 +44,10 @@ function cascadeRest(results, triggerPhase, sliceFrom, sliceTo = PHASES.length -
   }
 }
 
+function effectiveState(phase, strict) {
+  return strict && phase.state === STATE.WARN ? STATE.FAIL : phase.state;
+}
+
 function finalize(results) {
   return {
     phases: results,
@@ -60,13 +65,36 @@ async function finalizeWithReportTeardown(context, options, results) {
 
 async function runCistPhases(context, options = {}) {
   const results = [];
+  const strict = context.strict === true;
+
+  if (strict) {
+    const missing = buildStrictRequirements({
+      strict: true,
+      provider: options.provider,
+      redisClient: options.redisClient,
+      queue: options.queue,
+      mlClient: options.mlClient,
+      payloadSource: options.payloadSource,
+      worker: options.worker,
+    });
+    if (missing) {
+      return createPhaseResult(0, STATE.FAIL, {
+        durationMs: 0,
+        codes: ['STRICT_MODE_MISSING_CLIENTS'],
+        notes: [
+          `strict mode requires all real clients. Missing: ${missing.join(', ')}.`,
+          'Supply provider, redisClient, queue, mlClient, payloadSource, and worker options.',
+        ],
+      });
+    }
+  }
 
   const phase1 = await runConfigPreflight(context, {
     env: options.env || process.env,
   });
   results.push(phase1);
 
-  if (phase1.state === STATE.FAIL) {
+  if (effectiveState(phase1, strict) === STATE.FAIL) {
     cascadeRest(results, phase1, results.length);
     return finalizeWithReportTeardown(context, options, results);
   }
@@ -78,7 +106,7 @@ async function runCistPhases(context, options = {}) {
   });
   results.push(phase2);
 
-  if (phase2.state === STATE.FAIL) {
+  if (effectiveState(phase2, strict) === STATE.FAIL) {
     cascadeRest(results, phase2, results.length);
     return finalizeWithReportTeardown(context, options, results);
   }
@@ -89,7 +117,7 @@ async function runCistPhases(context, options = {}) {
   });
   results.push(phase3);
 
-  if (phase3.state === STATE.FAIL) {
+  if (effectiveState(phase3, strict) === STATE.FAIL) {
     cascadeRest(results, phase3, results.length);
     return finalizeWithReportTeardown(context, options, results);
   }
@@ -99,7 +127,7 @@ async function runCistPhases(context, options = {}) {
   });
   results.push(phase4);
 
-  if (phase4.state === STATE.FAIL) {
+  if (effectiveState(phase4, strict) === STATE.FAIL) {
     cascadeRest(results, phase4, results.length);
     return finalizeWithReportTeardown(context, options, results);
   }
@@ -109,7 +137,7 @@ async function runCistPhases(context, options = {}) {
   });
   results.push(phase5);
 
-  if (phase5.state === STATE.FAIL) {
+  if (effectiveState(phase5, strict) === STATE.FAIL) {
     cascadeRest(results, phase5, results.length);
     return finalizeWithReportTeardown(context, options, results);
   }
@@ -128,12 +156,12 @@ async function runCistPhases(context, options = {}) {
   });
   results.push(phase6);
 
-  if (phase6.state === STATE.FAIL) {
+  if (effectiveState(phase6, strict) === STATE.FAIL) {
     cascadeRest(results, phase6, results.length);
     return finalizeWithReportTeardown(context, options, results);
   }
 
-  if (phase6.state !== STATE.PASS) {
+  if (effectiveState(phase6, strict) !== STATE.PASS) {
     for (const phase of PHASES.slice(results.length, PHASES.length - 1)) {
       results.push(makeSkeletonPhaseResult(phase));
     }
@@ -287,7 +315,9 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       printDefaultOutput({ context, report, paths });
     }
 
-    const hasRealFail = phases.some((phase) => phase.state === STATE.FAIL);
+    const hasRealFail = phases.some((phase) =>
+      effectiveState(phase, context.strict === true) === STATE.FAIL
+    );
     process.exitCode = hasRealFail ? 1 : 0;
   } catch (error) {
     printFatalError(error, context.json);
@@ -305,6 +335,7 @@ module.exports = {
   cascadeRest,
   finalize,
   runCistPhases,
+  effectiveState,
   displayPath,
   printDefaultOutput,
   minimalFatalJson,

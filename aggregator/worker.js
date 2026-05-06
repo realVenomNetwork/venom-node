@@ -29,7 +29,7 @@ const PROCESSED_CAMPAIGN_TTL_SECONDS = parseInt(process.env.PROCESSED_CAMPAIGN_T
 const FETCH_FAILURE_PRECEDENCE = ["PayloadTooLarge", "HashMismatch", "NotFound", "Timeout", "FetchFailed"];
 const SCORE_MAX = parseInt(process.env.SCORE_MAX || "100", 10);
 const SCORE_MIN = parseInt(process.env.SCORE_MIN || "0", 10);
-const CID_REGEX = /^(Qm[1-9A-HJ-NP-Za-km-z]{44,}|bafy[A-HJ-NP-Za-km-z]{44,}|bafk[A-HJ-NP-Za-km-z]{44,})$/;
+const CID_REGEX = /^(Qm[1-9A-HJ-NP-Za-km-z]{44,}|baf[a-z2-7]{55,})$/i;
 const ABSTAIN_REASONS = Object.freeze({
   Timeout: 1,
   PayloadTooLarge: 2,
@@ -110,6 +110,36 @@ function assertTestPayloadAllowed() {
   assertRuntimeModeConfig(process.env);
 }
 
+function normalizeCid(input) {
+  if (!input || typeof input !== "string") return "";
+  const trimmed = input.trim();
+
+  if (trimmed.startsWith("ipfs://")) {
+    return trimmed.slice("ipfs://".length).split(/[/?#]/)[0];
+  }
+
+  if (trimmed.startsWith("/ipfs/")) {
+    return trimmed.slice("/ipfs/".length).split(/[/?#]/)[0];
+  }
+
+  try {
+    const url = new URL(trimmed);
+    const parts = url.pathname.split("/").filter(Boolean);
+    const ipfsIndex = parts.indexOf("ipfs");
+    if (ipfsIndex >= 0 && parts[ipfsIndex + 1]) {
+      return parts[ipfsIndex + 1];
+    }
+  } catch {
+    // Not a URL; treat it as a raw CID.
+  }
+
+  return trimmed.split(/[/?#]/)[0];
+}
+
+function isValidCid(input) {
+  return CID_REGEX.test(normalizeCid(input));
+}
+
 function getProcessedCampaignKey(campaignUid) {
   const { wallet } = getWorkerRuntime();
   return `venom:worker:processed:${wallet.address.toLowerCase()}:${campaignUid}`;
@@ -171,21 +201,20 @@ async function readLimitedText(response) {
 async function fetchFromIpfs(cid) {
   if (!IPFS_GATEWAYS.length) throw new Error("No IPFS gateways configured.");
 
-  if (!cid || !CID_REGEX.test(cid)) {
+  const normalizedCid = normalizeCid(cid);
+  if (!isValidCid(normalizedCid)) {
     throw new Error("Invalid CID format");
   }
 
   const failures = [];
-  const triedGateways = [];
 
   const results = await Promise.allSettled(
     IPFS_GATEWAYS.map(async (gateway) => {
-      const url = `${gateway}/${cid}`;
+      const url = `${gateway}/${normalizedCid}`;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), IPFS_GATEWAY_TIMEOUT);
 
       try {
-        triedGateways.push(gateway);
         const response = await fetch(url, { signal: controller.signal });
 
         if (!response.ok) {
@@ -197,9 +226,15 @@ async function fetchFromIpfs(cid) {
 
         try {
           const data = JSON.parse(text);
-          return data.payload ? data : { payload: text, reference_answer: "" };
+          return {
+            gateway,
+            data: data.payload ? data : { payload: text, reference_answer: "" },
+          };
         } catch {
-          return { payload: text, reference_answer: "" };
+          return {
+            gateway,
+            data: { payload: text, reference_answer: "" },
+          };
         }
       } catch (err) {
         if (err.message === "PayloadTooLarge") {
@@ -215,8 +250,8 @@ async function fetchFromIpfs(cid) {
 
   for (let i = 0; i < results.length; i++) {
     if (results[i].status === 'fulfilled' && results[i].value) {
-      console.log(`[Worker] Successfully fetched from ${triedGateways[i]}`);
-      return results[i].value;
+      console.log(`[Worker] Successfully fetched from ${results[i].value.gateway}`);
+      return results[i].value.data;
     }
   }
 
@@ -225,7 +260,7 @@ async function fetchFromIpfs(cid) {
     throw new Error(selectFailureReason(failures.map(f => f.reason)));
   }
 
-  return successfulResult.value;
+  return successfulResult.value.data;
 }
 
 function computeContentHash(payload) {
@@ -453,6 +488,8 @@ module.exports = {
   startWorker,
   processCampaign,
   fetchFromIpfs,
+  normalizeCid,
+  isValidCid,
   selectFailureReason,
   getAbstainReasonCode,
   getProcessedCampaignKey,

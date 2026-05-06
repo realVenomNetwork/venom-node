@@ -1,5 +1,6 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
+const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
 describe("Governance contracts", function () {
   let owner, signerA, signerB, signerC, recipient, treasury;
@@ -289,12 +290,68 @@ describe("Governance contracts", function () {
       await councilRegistry.setCurrentCouncil([signerA.address, signerB.address]);
       expect(await councilRegistry.getCurrentCouncil())
         .to.deep.equal([signerA.address, signerB.address]);
+      await expect(councilRegistry.setCurrentCouncil([signerC.address]))
+        .to.be.revertedWith("Use timelocked rotation");
 
       await councilRegistry.removeValidatorFromBranch(branchId, signerA.address);
       expect(await councilRegistry.getBranchValidators(branchId))
         .to.deep.equal([signerB.address]);
       await expect(councilRegistry.addValidatorToBranch(branchId, signerB.address))
         .to.be.revertedWith("Already in branch");
+    });
+
+    it("schedules and executes council rotation after a 48h timelock", async function () {
+      const CouncilRegistry = await ethers.getContractFactory("CouncilRegistry");
+      const councilRegistry = await CouncilRegistry.deploy();
+
+      const agnosticBranch = ethers.id("agnostic");
+      const secularBranch = ethers.id("secular");
+      await councilRegistry.registerBranch("agnostic");
+      await councilRegistry.registerBranch("secular");
+
+      await councilRegistry.addValidatorToBranch(agnosticBranch, signerA.address);
+      await councilRegistry.addValidatorToBranch(agnosticBranch, signerB.address);
+      await councilRegistry.addValidatorToBranch(secularBranch, signerB.address);
+      await councilRegistry.addValidatorToBranch(secularBranch, signerC.address);
+
+      await councilRegistry.setBranchTopValidators(agnosticBranch, [signerA.address, signerB.address]);
+      await councilRegistry.setBranchTopValidators(secularBranch, [signerB.address, signerC.address]);
+
+      await expect(councilRegistry.rotateCouncil())
+        .to.emit(councilRegistry, "CouncilRotationScheduled");
+      expect(await councilRegistry.getPendingCouncil())
+        .to.deep.equal([signerA.address, signerB.address, signerC.address]);
+
+      await expect(councilRegistry.executeCouncilRotation())
+        .to.be.revertedWith("Council rotation timelock active");
+
+      await time.increase(48 * 60 * 60 + 1);
+
+      await expect(councilRegistry.executeCouncilRotation())
+        .to.emit(councilRegistry, "CouncilRotated")
+        .withArgs([signerA.address, signerB.address, signerC.address]);
+      expect(await councilRegistry.getCurrentCouncil())
+        .to.deep.equal([signerA.address, signerB.address, signerC.address]);
+      expect(await councilRegistry.getPendingCouncil()).to.deep.equal([]);
+      expect(await councilRegistry.pendingCouncilExecutableAt()).to.equal(0n);
+    });
+
+    it("rejects invalid top validators and empty rotations", async function () {
+      const CouncilRegistry = await ethers.getContractFactory("CouncilRegistry");
+      const councilRegistry = await CouncilRegistry.deploy();
+
+      const branchId = ethers.id("agnostic");
+      await councilRegistry.registerBranch("agnostic");
+
+      await expect(councilRegistry.rotateCouncil())
+        .to.be.revertedWith("No eligible top validators");
+
+      await expect(councilRegistry.setBranchTopValidators(branchId, [signerA.address]))
+        .to.be.revertedWith("Top validator not in branch");
+
+      await councilRegistry.addValidatorToBranch(branchId, signerA.address);
+      await expect(councilRegistry.setBranchTopValidators(branchId, [signerA.address, signerA.address]))
+        .to.be.revertedWith("Duplicate top validator");
     });
   });
 
@@ -351,6 +408,12 @@ describe("Governance contracts", function () {
       expect(await registry.activeOracleCount()).to.equal(0n);
 
       expect(await registry.everSlashed(signerA.address)).to.be.true;
+
+      await registry.scheduleSlashedStakeWithdrawal(treasury.address, slashAmount);
+      await expect(registry.withdrawSlashedStake(treasury.address, slashAmount))
+        .to.be.revertedWith("Withdrawal timelock active");
+
+      await time.increase(48 * 60 * 60 + 1);
 
       await expect(registry.withdrawSlashedStake(treasury.address, slashAmount))
         .to.changeEtherBalances([registry, treasury], [-slashAmount, slashAmount]);

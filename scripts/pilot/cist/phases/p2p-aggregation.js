@@ -71,6 +71,15 @@ function normalizeOracleSignature(sig) {
   return sig;
 }
 
+function summarizeOracleSignature(sig) {
+  return {
+    oracleId: sig.oracleId,
+    address: sig.address,
+    signaturePresent: true,
+    signatureBytes: Math.floor((sig.signature.length - 2) / 2),
+  };
+}
+
 async function runP2pAggregation(context, options = {}) {
   const started = performance.now();
   const codes = [];
@@ -197,7 +206,7 @@ async function runP2pAggregation(context, options = {}) {
         const addrLower = normalized.address.toLowerCase();
         if (!seenAddresses.has(addrLower)) {
           seenAddresses.add(addrLower);
-          signatures.push(normalized);
+          signatures.push(summarizeOracleSignature(normalized));
         }
       } catch (error) {
         codes.push('P2P_ORACLE_SIGNATURE_INVALID');
@@ -265,5 +274,6 @@ module.exports = {
   assertWorkerDecisionShape,
   buildAggregationMessage,
   normalizeOracleSignature,
+  summarizeOracleSignature,
   runP2pAggregation,
 };

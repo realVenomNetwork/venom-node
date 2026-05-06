@@ -3,6 +3,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { Wallet } = require('ethers');
 
 const { STATE, PHASES, createPhaseResult } = require('./cist/phases');
 const { writeReports } = require('./cist/report');
@@ -21,6 +22,15 @@ const {
   buildStrictRequirements,
   configErrorToText,
 } = require('./cist/config');
+const { SELECTORS } = require('./cist/phases/chain-binding');
+
+const FIXTURE_ESCROW_ADDRESS = '0x1234567890123456789012345678901234567890';
+const FIXTURE_REGISTRY_ADDRESS = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
+const FIXTURE_ESCROW_BYTECODE =
+  `0x608060405234801561001057600080fd5b5063${SELECTORS.OPERATOR_PAYOUT.slice(2)}600052`;
+const FIXTURE_REGISTRY_BYTECODE =
+  `0x608060405234801561001057600080fd5b5063${SELECTORS.UNSTAKE.slice(2)}600052`;
+const FIXTURE_ORACLE_COUNT = 3;
 
 function makeSkeletonPhaseResult(phase) {
   return createPhaseResult(phase.index, STATE.SKIP, {
@@ -31,10 +41,11 @@ function makeSkeletonPhaseResult(phase) {
 
 function makeSkippedPhaseResult(phase, triggerPhase) {
   const reason = triggerPhase.state === STATE.SKIP ? 'did not pass' : 'failed';
+  const triggerName = triggerPhase.skipReason || triggerPhase.name;
   return createPhaseResult(phase.index, STATE.SKIP, {
     durationMs: 0,
     codes: [],
-    notes: [`Skipped because ${triggerPhase.name} ${reason}.`],
+    notes: [`Skipped because ${triggerName} ${reason}.`],
   });
 }
 
@@ -54,6 +65,63 @@ function finalize(results) {
     releaseReadiness: {
       unresolved: results.flatMap((phase) => phase.releaseReadiness?.unresolved ?? []),
     },
+  };
+}
+
+function buildFixtureClientOptions(context) {
+  return {
+    provider: {
+      getNetwork: async () => ({ chainId: 31337, name: 'hardhat' }),
+      getCode: async (address) => {
+        if (address === FIXTURE_ESCROW_ADDRESS) return FIXTURE_ESCROW_BYTECODE;
+        if (address === FIXTURE_REGISTRY_ADDRESS) return FIXTURE_REGISTRY_BYTECODE;
+        return '0x';
+      },
+    },
+    escrowAddress: FIXTURE_ESCROW_ADDRESS,
+    registryAddress: FIXTURE_REGISTRY_ADDRESS,
+    redisClient: {
+      ping: async () => 'PONG',
+      keys: async () => [],
+    },
+    queue: {
+      name: 'cist-fixture-queue',
+      add: async () => ({ id: `${context.runId}:queue-probe` }),
+      close: async () => {},
+    },
+    mlClient: {
+      health: async () => ({
+        status: 'healthy',
+        model_loaded: true,
+        model_name: 'fixture-semantic-model',
+      }),
+    },
+    payloadSource: async () => ({
+      campaignUid: `${context.runId}:campaign`,
+      payload: 'fixture payload',
+      reference_answer: 'fixture reference',
+    }),
+    worker: {
+      process: async (job) => ({
+        campaignUid: job.payload.campaignUid,
+        decision: 'approve',
+        score: 0.92,
+        reason: 'fixture worker approved the payload',
+      }),
+    },
+    oracleFactory: {
+      createOracles: async ({ message }) => Array.from({ length: FIXTURE_ORACLE_COUNT }, (_, index) => {
+        const wallet = Wallet.createRandom();
+        return {
+          sign: async () => ({
+            oracleId: `fixture-oracle-${index + 1}`,
+            address: wallet.address,
+            signature: await wallet.signMessage(message),
+          }),
+        };
+      }),
+    },
+    p2pQuorum: FIXTURE_ORACLE_COUNT,
   };
 }
 
@@ -78,14 +146,18 @@ async function runCistPhases(context, options = {}) {
       worker: options.worker,
     });
     if (missing) {
-      return createPhaseResult(0, STATE.FAIL, {
+      const phase1 = createPhaseResult(1, STATE.FAIL, {
         durationMs: 0,
         codes: ['STRICT_MODE_MISSING_CLIENTS'],
+        skipReason: 'Strict mode dependency preflight',
         notes: [
           `strict mode requires all real clients. Missing: ${missing.join(', ')}.`,
           'Supply provider, redisClient, queue, mlClient, payloadSource, and worker options.',
         ],
       });
+      results.push(phase1);
+      cascadeRest(results, phase1, results.length);
+      return finalizeWithReportTeardown(context, options, results);
     }
   }
 
@@ -284,7 +356,11 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   }
 
   try {
-    const { phases, releaseReadiness } = await runCistPhases(context, { env });
+    const fixtureOptions = context.withFixtureClients ? buildFixtureClientOptions(context) : {};
+    const { phases, releaseReadiness } = await runCistPhases(context, {
+      ...fixtureOptions,
+      env,
+    });
     const finishedAt = new Date();
 
     const reportParams = {
@@ -340,5 +416,6 @@ module.exports = {
   printDefaultOutput,
   minimalFatalJson,
   printFatalError,
+  buildFixtureClientOptions,
   main,
-};	
+};

@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   cist-fixture:
     runs-on: ubuntu-latest
@@ -27,10 +30,39 @@ jobs:
       - name: Run unit test suite
         run: npm test
 
+      - name: Run CIST unit tests
+        run: npm run test:cist
+
       - name: Run CIST fixture smoke test
-        run: npm run pilot:smoke-test -- --json
+        run: npm run pilot:smoke-test -- --json --with-fixture-clients
         env:
           CI: true
+
+      - name: Require PASS CIST result
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = path.resolve('tmp/smoke-test');
+          if (!fs.existsSync(root)) {
+            console.error('No CIST report directory found.');
+            process.exit(1);
+          }
+          const reports = fs.readdirSync(root)
+            .map((name) => path.join(root, name, 'report.json'))
+            .filter((file) => fs.existsSync(file))
+            .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+          if (!reports.length) {
+            console.error('No CIST report.json found.');
+            process.exit(1);
+          }
+          const report = JSON.parse(fs.readFileSync(reports[0], 'utf8'));
+          if (report.result !== 'PASS') {
+            console.error(`CIST result was ${report.result}; expected PASS.`);
+            process.exit(1);
+          }
+          console.log(`CIST result PASS: ${reports[0]}`);
+          NODE
 
       - name: Sweep CIST artifacts for redaction
         id: redaction_sweep

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
@@ -14,7 +14,7 @@ import "./VenomRegistry.sol";
  * applies quorum checks, and returns the funded bounty to the campaign recipient
  * recorded at funding time. Operator bounty payout is not implemented yet.
  */
-contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
+contract PilotEscrow is Ownable2Step, Pausable, ReentrancyGuard {
     VenomRegistry public immutable registry;
 
     uint256 private constant MAX_SCORES = 20;
@@ -26,6 +26,7 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
     uint256 public constant MAX_SCORE = 100;
     uint256 public constant CAMPAIGN_TIMEOUT_BLOCKS = 7200; // ~4h on Base at ~2s blocks
     uint256 public constant CANCEL_FEE_BPS = 100;           // 1% retained on cancel
+    uint256 public constant WITHDRAWAL_TIMELOCK = 48 hours;
 
     // === EIP-712 ===
     string public constant NAME = "VENOM PilotEscrow";
@@ -40,6 +41,11 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
     // === Insurance pool: cancel fees + slash residuals accumulate here ===
     uint256 public insurancePool;
 
+    struct WithdrawalRequest {
+        uint256 amount;
+        uint256 executableAt;
+    }
+
     struct Campaign {
         address recipient;
         uint256 bounty;
@@ -49,6 +55,7 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
         bytes32 contentHash;
     }
     mapping(bytes32 => Campaign) public campaigns;
+    mapping(address => WithdrawalRequest) public pendingInsuranceWithdrawals;
 
     /// @notice Emitted when a funder creates a campaign bounty.
     event CampaignFunded(bytes32 indexed campaignUid, address indexed funder, uint256 amount, string contentUri, bytes32 contentHash);
@@ -58,6 +65,12 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
     event CampaignCancelled(bytes32 indexed campaignUid, address indexed funder, uint256 refund, uint256 fee);
     /// @notice Emitted when cancellation fees are retained by the insurance pool.
     event InsurancePoolDeposit(uint256 amount, string reason);
+    /// @notice Emitted when the owner schedules an insurance pool withdrawal.
+    event InsuranceWithdrawalScheduled(address indexed recipient, uint256 amount, uint256 executableAt);
+    /// @notice Emitted when the owner withdraws from the insurance pool.
+    event InsuranceWithdrawalExecuted(address indexed recipient, uint256 amount);
+    /// @notice Emitted when the owner cancels a scheduled insurance pool withdrawal.
+    event InsuranceWithdrawalCancelled(address indexed recipient);
 
     constructor(address _registry) Ownable(msg.sender) {
         require(_registry != address(0), "Zero registry");
@@ -262,13 +275,38 @@ contract PilotEscrow is Ownable, Pausable, ReentrancyGuard {
         return src[count / 2];
     }
 
-    /// @notice Withdraw accumulated insurance pool funds.
-    function withdrawInsurancePool(address payable recipient, uint256 amount) external onlyOwner {
+    /// @notice Schedule accumulated insurance pool withdrawal.
+    function scheduleInsuranceWithdrawal(address payable recipient, uint256 amount) external onlyOwner {
         require(recipient != address(0), "Zero address");
         require(amount > 0, "Amount must be positive");
         require(amount <= insurancePool, "Exceeds insurance pool");
+        require(pendingInsuranceWithdrawals[recipient].amount == 0, "Withdrawal already scheduled");
+        uint256 executableAt = block.timestamp + WITHDRAWAL_TIMELOCK;
+        pendingInsuranceWithdrawals[recipient] = WithdrawalRequest({
+            amount: amount,
+            executableAt: executableAt
+        });
+        emit InsuranceWithdrawalScheduled(recipient, amount, executableAt);
+    }
+
+    /// @notice Cancel a scheduled insurance pool withdrawal.
+    function cancelInsuranceWithdrawal(address recipient) external onlyOwner {
+        require(pendingInsuranceWithdrawals[recipient].amount > 0, "No scheduled withdrawal");
+        delete pendingInsuranceWithdrawals[recipient];
+        emit InsuranceWithdrawalCancelled(recipient);
+    }
+
+    /// @notice Execute a scheduled insurance pool withdrawal after the timelock.
+    function withdrawInsurancePool(address payable recipient, uint256 amount) external onlyOwner nonReentrant {
+        WithdrawalRequest memory request = pendingInsuranceWithdrawals[recipient];
+        require(request.amount > 0, "No scheduled withdrawal");
+        require(request.amount == amount, "Amount mismatch");
+        require(block.timestamp >= request.executableAt, "Withdrawal timelock active");
+        require(amount <= insurancePool, "Exceeds insurance pool");
+        delete pendingInsuranceWithdrawals[recipient];
         insurancePool -= amount;
         (bool ok,) = recipient.call{value: amount}("");
         require(ok, "Transfer failed");
+        emit InsuranceWithdrawalExecuted(recipient, amount);
     }
 }

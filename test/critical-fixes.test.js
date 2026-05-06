@@ -188,6 +188,61 @@ describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
                 .to.be.revertedWith("No pending upgrade");
         });
     });
+
+    describe("Owner withdrawal timelocks", function () {
+        async function callReportDeviation(operator, submittedScore, medianScore) {
+            const escrowAddress = await escrow.getAddress();
+            await ethers.provider.send("hardhat_setBalance", [
+                escrowAddress,
+                ethers.toBeHex(ethers.parseEther("1.0"))
+            ]);
+            const escrowSigner = await ethers.getImpersonatedSigner(escrowAddress);
+            return registry.connect(escrowSigner).reportDeviation(operator, submittedScore, medianScore);
+        }
+
+        it("requires 48h timelock before withdrawing slashed stake reserve", async function () {
+            await registerOracle(oracle1);
+            await callReportDeviation(oracle1.address, 100, 50);
+
+            const slashAmount = (ethers.parseEther("1.0") * 5n) / 100n;
+            await expect(registry.scheduleSlashedStakeWithdrawal(owner.address, slashAmount))
+                .to.emit(registry, "SlashedStakeWithdrawalScheduled");
+
+            await expect(registry.withdrawSlashedStake(owner.address, slashAmount))
+                .to.be.revertedWith("Withdrawal timelock active");
+
+            await time.increase(48 * 60 * 60 + 1);
+
+            await expect(registry.withdrawSlashedStake(owner.address, slashAmount))
+                .to.emit(registry, "SlashedStakeWithdrawn")
+                .withArgs(owner.address, slashAmount);
+            expect(await registry.slashedStakeReserve()).to.equal(0n);
+        });
+
+        it("requires 48h timelock before withdrawing insurance pool", async function () {
+            const uid = ethers.id("INSURANCE_TIMELOCK");
+            const bounty = ethers.parseEther("1.0");
+            await escrow.fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: bounty });
+            await ethers.provider.send("hardhat_mine", ["0x1C20"]);
+            await escrow.cancelCampaign(uid);
+
+            const fee = (bounty * 100n) / 10000n;
+            expect(await escrow.insurancePool()).to.equal(fee);
+
+            await expect(escrow.scheduleInsuranceWithdrawal(owner.address, fee))
+                .to.emit(escrow, "InsuranceWithdrawalScheduled");
+
+            await expect(escrow.withdrawInsurancePool(owner.address, fee))
+                .to.be.revertedWith("Withdrawal timelock active");
+
+            await time.increase(48 * 60 * 60 + 1);
+
+            await expect(escrow.withdrawInsurancePool(owner.address, fee))
+                .to.emit(escrow, "InsuranceWithdrawalExecuted")
+                .withArgs(owner.address, fee);
+            expect(await escrow.insurancePool()).to.equal(0n);
+        });
+    });
 });
 
 describe("Runtime Mode Config", function () {

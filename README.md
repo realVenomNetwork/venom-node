@@ -13,11 +13,11 @@ Key economic parameters:
 - `VenomRegistry.MIN_STAKE` is 1 ETH (testnet).
 - `VenomRegistry.SLASH_PERCENT` is 5%.
 - `PilotEscrow.fundCampaign()` records the funder as the campaign recipient, so `closeCampaign()` returns the bounty to that address. Operator bounty payouts are not yet implemented.
-- Oracle unstaking is implemented with a 7-day cooldown; slashed stake is tracked in `slashedStakeReserve` and can be withdrawn by the registry owner.
+- Oracle unstaking is implemented with a 7-day cooldown; slashed stake is tracked in `slashedStakeReserve` and can be withdrawn by the registry owner only after a 48h withdrawal timelock.
 
 ## Architecture
 
-**Contracts** — `PilotEscrow` handles campaign funding, EIP-712 score/abstain signature verification, quorum gates (absolute floor, percentage threshold, participation floor), and campaign close or timeout refund. `VenomRegistry` manages oracle registration with stake, active oracle tracking, deviation-based slashing, and unstake cooldown. Governance contracts (`CouncilRegistry`, `AgreementFactory`, `MinimalMultiSig`, `ConsentManager`, `TitheManager`) are compiled and tested but not yet wired into the active escrow payment path.
+**Contracts** — `PilotEscrow` handles campaign funding, EIP-712 score/abstain signature verification, quorum gates (absolute floor, percentage threshold, participation floor), and campaign close or timeout refund. `VenomRegistry` manages oracle registration with stake, active oracle tracking, deviation-based slashing, unstake cooldown, and timelocked slashed-stake withdrawals. `CouncilRegistry` supports 48h-timelocked council rotation from per-branch top validators. Governance contracts (`CouncilRegistry`, `AgreementFactory`, `MinimalMultiSig`, `ConsentManager`, `TitheManager`) are compiled and tested but not yet wired into the active escrow payment path.
 
 **Aggregator node** — `producer.js` scans on-chain events for new campaigns and queues them in Redis/BullMQ. `worker.js` picks up jobs, fetches payloads, verifies content hashes, scores via the ML service, and produces EIP-712 signatures. `p2p.js` handles libp2p gossip of score and abstain signatures, deterministic leader election, and quorum-gated on-chain submission.
 
@@ -63,18 +63,21 @@ docker compose up -d --build
 4. Run the component integration smoke test:
 
 ```bash
-npm run pilot:smoke-test -- --scenario=all-agree
+npm run pilot:smoke-test -- --scenario=all-agree --with-fixture-clients
 ```
 
 Logs land in `tmp/smoke-test/`. Each run produces `report.json` and `report.md` in a timestamped subdirectory. `tmp/smoke-test/latest.txt` points to the most recent run.
+
+For a read-only Base Sepolia preflight against real RPC, Redis, ML, IPFS gateways, contract bytecode, active-oracle count, and operator balance:
+
+```bash
+npm run pilot:preflight -- --network=base-sepolia
+```
 
 ## Known Limitations and Open Work
 
 - **Real-payload IPFS fetching** is wired but has not been piloted on live testnet.
 - **Slashing surface** is implemented but not yet exercised against adversarial end-to-end scenarios.
-- **`CouncilRegistry.rotateCouncil()`** reverts with "Not implemented" — stub only.
-- **`aggregator/nonceManager.js`** is unused; pending decision to integrate or remove.
-- **`rpc/router.js`** has a minor timer leak on successful calls (non-blocking, low priority).
 - **Governance integration** — `ConsentManager` and `TitheManager` are not yet wired into `PilotEscrow.closeCampaign()`. They are deployable and tested but not active in the payment path.
 - **No external security audit.** The contracts have internal review coverage but no third-party audit.
 

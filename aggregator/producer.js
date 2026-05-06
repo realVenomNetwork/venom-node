@@ -16,8 +16,9 @@ let multiProvider = null;
 let pilotEscrow = null;
 let lastScannedBlock = null;
 let producerInterval = null;
-const SCAN_LOOKBACK_BLOCKS = Number(process.env.PRODUCER_SCAN_LOOKBACK_BLOCKS || 200);
+const SCAN_LOOKBACK_BLOCKS = Number(process.env.PRODUCER_SCAN_LOOKBACK_BLOCKS || 10000);
 const REORG_LOOKBACK_BLOCKS = Number(process.env.PRODUCER_REORG_LOOKBACK_BLOCKS || 10);
+const SCAN_CHUNK_BLOCKS = Number(process.env.PRODUCER_SCAN_CHUNK_BLOCKS || 1000);
 const CAMPAIGN_QUEUE_TTL = 3600; // 1 hour
 
 function getProducerRuntime() {
@@ -60,6 +61,47 @@ async function saveLastScannedBlock(blockNumber) {
   await getConnection().set(getCursorKey(), String(blockNumber), 'EX', 86400);
 }
 
+function isBlockRangeError(error) {
+  const text = [
+    error?.message,
+    error?.shortMessage,
+    error?.info?.error?.message,
+    error?.error?.message
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  return text.includes("block range") ||
+    text.includes("too many results") ||
+    text.includes("query returned more than") ||
+    text.includes("response size exceeded") ||
+    text.includes("limit exceeded");
+}
+
+async function queryCampaignFundedEvents(runtime, fromBlock, toBlock, chunkSize = SCAN_CHUNK_BLOCKS) {
+  const events = [];
+  let start = fromBlock;
+
+  while (start <= toBlock) {
+    const end = Math.min(toBlock, start + Math.max(1, chunkSize) - 1);
+    try {
+      const chunk = await runtime.pilotEscrow.queryFilter("CampaignFunded", start, end);
+      events.push(...chunk);
+      start = end + 1;
+    } catch (error) {
+      const span = end - start + 1;
+      if (span > 1 && isBlockRangeError(error)) {
+        const smallerChunk = Math.max(1, Math.floor(span / 2));
+        console.warn(`[Producer] RPC rejected ${span}-block log range; retrying in ${smallerChunk}-block chunks`);
+        events.push(...await queryCampaignFundedEvents(runtime, start, end, smallerChunk));
+        start = end + 1;
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return events;
+}
+
 async function discoverAndQueueNewCampaigns() {
   try {
     const runtime = getProducerRuntime();
@@ -74,7 +116,7 @@ async function discoverAndQueueNewCampaigns() {
 
     console.log(`[Producer] Scanning blocks ${fromBlock} -> ${toBlock}`);
 
-    const events = await runtime.pilotEscrow.queryFilter("CampaignFunded", fromBlock, toBlock);
+    const events = await queryCampaignFundedEvents(runtime, fromBlock, toBlock);
 
     for (const event of events) {
       const uid = event.args.campaignUid;
@@ -146,5 +188,7 @@ module.exports = {
   discoverAndQueueNewCampaigns,
   getCursorKey,
   loadLastScannedBlock,
-  saveLastScannedBlock
+  saveLastScannedBlock,
+  queryCampaignFundedEvents,
+  isBlockRangeError
 };

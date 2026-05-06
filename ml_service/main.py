@@ -44,9 +44,16 @@ logger = logging.getLogger("venom.ml_service")
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 limiter = Limiter(key_func=get_remote_address)
 
+def requires_api_key() -> bool:
+    runtime_mode = os.getenv("VENOM_RUNTIME_MODE", "").strip().lower()
+    node_env = os.getenv("NODE_ENV", "").strip().lower()
+    return runtime_mode in {"testnet", "mainnet"} or node_env == "production"
+
 async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
     expected_key = os.getenv("ML_SERVICE_API_KEY")
     if not expected_key:
+        if requires_api_key():
+            raise HTTPException(status_code=503, detail="ML_SERVICE_API_KEY is required in testnet/mainnet mode")
         return api_key
     if not api_key or api_key != expected_key:
         raise HTTPException(status_code=403, detail="Invalid API key")
@@ -128,10 +135,14 @@ app.add_middleware(SlowAPIMiddleware)
 @app.get("/health", dependencies=[Depends(optional_verify_api_key)])
 @limiter.limit("30/minute")
 async def health_check(request: Request):
+    api_key_configured = bool(os.getenv("ML_SERVICE_API_KEY"))
+    if requires_api_key() and not api_key_configured:
+        raise HTTPException(status_code=503, detail="ML_SERVICE_API_KEY is required in testnet/mainnet mode")
     return {
         "status": "healthy",
         "model_loaded": hasattr(app.state, "semantic_model"),
-        "model_name": SEMANTIC_MODEL_NAME
+        "model_name": SEMANTIC_MODEL_NAME,
+        "api_key_configured": api_key_configured
     }
 
 

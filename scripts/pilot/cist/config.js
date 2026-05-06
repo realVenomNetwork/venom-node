@@ -24,7 +24,8 @@ function parseArgs(argv = []) {
     explain: false,
     json: false,
     confirmLiveTestnet: false,
-    strict: false
+    strict: false,
+    withFixtureClients: false
   };
 
   for (const arg of argv) {
@@ -36,6 +37,8 @@ function parseArgs(argv = []) {
       options.confirmLiveTestnet = true;
     } else if (arg === '--strict') {
       options.strict = true;
+    } else if (arg === '--with-fixture-clients') {
+      options.withFixtureClients = true;
     } else if (arg.startsWith('--mode=')) {
       options.mode = arg.slice('--mode='.length);
     } else if (arg.startsWith('--scenario=')) {
@@ -47,6 +50,7 @@ function parseArgs(argv = []) {
         [
           'Supported examples:',
           '  npm run pilot:smoke-test',
+          '  npm run pilot:smoke-test -- --with-fixture-clients',
           '  npm run pilot:smoke-test -- --scenario=mixed',
           '  npm run pilot:smoke-test -- --json',
           '  npm run pilot:smoke-test -- --strict'
@@ -92,6 +96,17 @@ function parseArgs(argv = []) {
     );
   }
 
+  if (options.withFixtureClients && options.mode !== MODES.FIXTURE) {
+    throw makeConfigError(
+      'CONFIG_FIXTURE_CLIENTS_MODE_MISMATCH',
+      '--with-fixture-clients is only supported in fixture mode',
+      [
+        'Fixture clients are synthetic and must never be used for live-testnet checks.',
+        'Use live-testnet mode with real clients for pre-deploy verification.'
+      ]
+    );
+  }
+
   return options;
 }
 
@@ -125,6 +140,7 @@ function buildRunContext(input = {}) {
     json: options.json,
     confirmLiveTestnet: options.confirmLiveTestnet,
     strict: options.strict,
+    withFixtureClients: options.withFixtureClients,
 
     startedAt,
 
@@ -160,11 +176,9 @@ function buildSafeEnvSummary(env = {}) {
     mlServiceUrl: env.ML_SERVICE_URL || null,
 
     rpcUrlSet: Boolean(env.RPC_URL || env.RPC_URLS),
-    operatorPrivateKeySet: Boolean(
-      env.OPERATOR_PRIVATE_KEY ||
-      env.BROADCASTER_PRIVATE_KEY ||
-      env.DEPLOYER_PRIVATE_KEY
-    ),
+    operatorPrivateKeySet: Boolean(env.OPERATOR_PRIVATE_KEY),
+    broadcasterPrivateKeySet: Boolean(env.BROADCASTER_PRIVATE_KEY),
+    deployerPrivateKeySet: Boolean(env.DEPLOYER_PRIVATE_KEY),
 
     pilotEscrowAddressSet: Boolean(env.PILOT_ESCROW_ADDRESS),
     venomRegistryAddressSet: Boolean(env.VENOM_REGISTRY_ADDRESS)

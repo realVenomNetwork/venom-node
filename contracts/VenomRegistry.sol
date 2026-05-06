@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
@@ -11,7 +11,7 @@ import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
  * @dev Registered stake can be withdrawn after a cooldown period via requestUnstake/finalizeUnstake.
  * Only stake slashed through PilotEscrow deviation reports can be withdrawn by the owner via slashedStakeReserve.
  */
-contract VenomRegistry is Ownable, ReentrancyGuard {
+contract VenomRegistry is Ownable2Step, ReentrancyGuard {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     struct Oracle {
@@ -31,7 +31,15 @@ contract VenomRegistry is Ownable, ReentrancyGuard {
     uint256 public slashedStakeReserve;
     uint256 private constant MAX_ORACLES = 1000;
     uint256 private constant UNSTAKE_COOLDOWN = 7 days;
+    uint256 public constant WITHDRAWAL_TIMELOCK = 48 hours;
+
+    struct WithdrawalRequest {
+        uint256 amount;
+        uint256 executableAt;
+    }
+
     mapping(address => uint256) public unstakeRequestedAt;
+    mapping(address => WithdrawalRequest) public pendingSlashedStakeWithdrawals;
     address public pendingPilotEscrow;
     uint256 public pendingPilotEscrowScheduledAt;
 
@@ -49,6 +57,10 @@ contract VenomRegistry is Ownable, ReentrancyGuard {
     event PilotEscrowSet(address indexed pilotEscrow);
     /// @notice Emitted when the owner withdraws ETH from the slashed stake reserve.
     event SlashedStakeWithdrawn(address indexed recipient, uint256 amount);
+    /// @notice Emitted when the owner schedules a slashed stake reserve withdrawal.
+    event SlashedStakeWithdrawalScheduled(address indexed recipient, uint256 amount, uint256 executableAt);
+    /// @notice Emitted when the owner cancels a scheduled slashed stake reserve withdrawal.
+    event SlashedStakeWithdrawalCancelled(address indexed recipient);
     /// @notice Emitted when an oracle requests to unstake.
     event UnstakeRequested(address indexed operator, uint256 scheduledAt);
     /// @notice Emitted when an oracle finalizes unstake and receives stake back.
@@ -174,10 +186,35 @@ contract VenomRegistry is Ownable, ReentrancyGuard {
         }
     }
 
-    /// @notice Withdraw ETH that has already been accounted into slashedStakeReserve.
-    function withdrawSlashedStake(address payable recipient, uint256 amount) external onlyOwner {
+    /// @notice Schedule withdrawal of ETH already accounted into slashedStakeReserve.
+    function scheduleSlashedStakeWithdrawal(address payable recipient, uint256 amount) external onlyOwner {
         require(recipient != address(0), "Zero address");
+        require(amount > 0, "Amount must be positive");
         require(amount <= slashedStakeReserve, "Exceeds reserve");
+        require(pendingSlashedStakeWithdrawals[recipient].amount == 0, "Withdrawal already scheduled");
+        uint256 executableAt = block.timestamp + WITHDRAWAL_TIMELOCK;
+        pendingSlashedStakeWithdrawals[recipient] = WithdrawalRequest({
+            amount: amount,
+            executableAt: executableAt
+        });
+        emit SlashedStakeWithdrawalScheduled(recipient, amount, executableAt);
+    }
+
+    /// @notice Cancel a scheduled slashed stake reserve withdrawal.
+    function cancelSlashedStakeWithdrawal(address recipient) external onlyOwner {
+        require(pendingSlashedStakeWithdrawals[recipient].amount > 0, "No scheduled withdrawal");
+        delete pendingSlashedStakeWithdrawals[recipient];
+        emit SlashedStakeWithdrawalCancelled(recipient);
+    }
+
+    /// @notice Execute a scheduled slashed stake reserve withdrawal after the timelock.
+    function withdrawSlashedStake(address payable recipient, uint256 amount) external onlyOwner nonReentrant {
+        WithdrawalRequest memory request = pendingSlashedStakeWithdrawals[recipient];
+        require(request.amount > 0, "No scheduled withdrawal");
+        require(request.amount == amount, "Amount mismatch");
+        require(block.timestamp >= request.executableAt, "Withdrawal timelock active");
+        require(amount <= slashedStakeReserve, "Exceeds reserve");
+        delete pendingSlashedStakeWithdrawals[recipient];
         slashedStakeReserve -= amount;
         (bool ok, ) = recipient.call{value: amount}("");
         require(ok, "Transfer failed");

@@ -16,6 +16,7 @@ const LEADER_TIMEOUT_MS = Number(process.env.P2P_LEADER_TIMEOUT_MS || 15 * 1000)
 const MAX_MESSAGE_AGE_MS = Number(process.env.P2P_MAX_MESSAGE_AGE_MS || 5 * 60 * 1000);
 const MAX_MESSAGES_PER_WINDOW = Number(process.env.P2P_MAX_MESSAGES_PER_WINDOW || 100);
 const RATE_WINDOW_MS = Number(process.env.P2P_RATE_WINDOW_MS || 10000);
+const CLOSE_CONFIRMATIONS = Number(process.env.CLOSE_CONFIRMATIONS || 3);
 
 let libp2p;
 let libp2pModules;
@@ -359,6 +360,20 @@ function isAlreadyClosedError(error) {
   return text.includes("Campaign already closed") || text.includes("Already closed");
 }
 
+function closeTxOverrides() {
+  const overrides = {};
+  if (process.env.CLOSE_GAS_LIMIT) {
+    overrides.gasLimit = BigInt(process.env.CLOSE_GAS_LIMIT);
+  }
+  if (process.env.CLOSE_MAX_FEE_GWEI) {
+    overrides.maxFeePerGas = ethers.parseUnits(process.env.CLOSE_MAX_FEE_GWEI, "gwei");
+  }
+  if (process.env.CLOSE_MAX_PRIORITY_FEE_GWEI) {
+    overrides.maxPriorityFeePerGas = ethers.parseUnits(process.env.CLOSE_MAX_PRIORITY_FEE_GWEI, "gwei");
+  }
+  return overrides;
+}
+
 async function handleSignatureMessage(evt) {
   try {
     if (Math.random() < 0.01) cleanupRateLimiter();
@@ -496,7 +511,8 @@ async function submitAggregatedTransaction(campaignUid, entry) {
     });
 
     const pilotEscrow = new ethers.Contract(pilotEscrowAddress, [
-      "function closeCampaign(bytes32,uint256[],bytes[],uint8[],bytes[]) external"
+      "function closeCampaign(bytes32,uint256[],bytes[],uint8[],bytes[]) external",
+      "function campaigns(bytes32) view returns (address recipient, uint256 bounty, bool closed, uint256 fundedBlock, string contentUri, bytes32 contentHash)"
     ], myWallet);
 
     const combinedScores = entry.scores.map((score, i) => ({ score, signature: entry.signatures[i] }));
@@ -509,10 +525,15 @@ async function submitAggregatedTransaction(campaignUid, entry) {
       sortedScores,
       sortedSignatures,
       entry.abstainReasons,
-      entry.abstainSignatures
+      entry.abstainSignatures,
+      closeTxOverrides()
     );
 
-    const receipt = await tx.wait();
+    const receipt = await tx.wait(CLOSE_CONFIRMATIONS);
+    const campaign = await pilotEscrow.campaigns(campaignUid);
+    if (!campaign.closed && campaign[2] !== true) {
+      throw new Error("closeCampaign receipt observed, but campaign is not closed on-chain");
+    }
     console.log(`SUCCESS: Campaign closed in block ${receipt.blockNumber}`);
     markCampaignLocallyClosed(campaignUid);
     recordDashboardEvent({

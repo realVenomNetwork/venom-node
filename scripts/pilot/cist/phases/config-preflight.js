@@ -101,7 +101,14 @@ async function runConfigPreflight(context, options = {}) {
 
 function findMissingRequiredEnv(mode, env) {
   const required = REQUIRED_ENV_BY_MODE[mode] || [];
-  return required.filter((name) => !env[name]);
+  return required.filter((name) => !hasRequiredEnvValue(name, env));
+}
+
+function hasRequiredEnvValue(name, env) {
+  if (name === 'RPC_URL') {
+    return Boolean(env.RPC_URL || env.RPC_URLS);
+  }
+  return Boolean(env[name]);
 }
 
 function runRedactionSelfTest() {

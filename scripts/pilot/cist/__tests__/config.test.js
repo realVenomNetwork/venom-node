@@ -38,7 +38,8 @@ describe('CIST config / RunContext', function () {
       explain: false,
       json: false,
       confirmLiveTestnet: false,
-      strict: false
+      strict: false,
+      withFixtureClients: false
     });
   });
 
@@ -47,13 +48,15 @@ describe('CIST config / RunContext', function () {
       '--mode=fixture',
       '--scenario=mixed',
       '--json',
-      '--explain'
+      '--explain',
+      '--with-fixture-clients'
     ]);
 
     expect(options.mode).to.equal(MODES.FIXTURE);
     expect(options.scenario).to.equal(SCENARIOS.MIXED);
     expect(options.json).to.equal(true);
     expect(options.explain).to.equal(true);
+    expect(options.withFixtureClients).to.equal(true);
   });
 
   it('parseArgs accepts live-testnet only with explicit confirmation', function () {
@@ -69,8 +72,17 @@ describe('CIST config / RunContext', function () {
   });
 
   it('parseArgs rejects unsupported arguments, modes, and scenarios', function () {
+    let unsupportedError;
     expect(() => parseArgs(['--unknown'])).to.throw('Unsupported CIST argument: --unknown')
       .with.property('code', 'CONFIG_UNSUPPORTED_ARGUMENT');
+    try {
+      parseArgs(['--unknown']);
+    } catch (error) {
+      unsupportedError = error;
+    }
+    expect(unsupportedError.details.join('\n')).to.include(
+      'npm run pilot:smoke-test -- --with-fixture-clients'
+    );
 
     expect(() => parseArgs(['--mode=mainnet'])).to.throw('Unsupported CIST mode: mainnet')
       .with.property('code', 'CONFIG_UNSUPPORTED_MODE');
@@ -83,6 +95,15 @@ describe('CIST config / RunContext', function () {
     expect(() => parseArgs(['--mode=live-testnet']))
       .to.throw('live-testnet mode requires --confirm-live-testnet')
       .with.property('code', 'CONFIG_LIVE_TESTNET_CONFIRMATION_MISSING');
+  });
+
+  it('parseArgs rejects fixture clients outside fixture mode', function () {
+    expect(() => parseArgs([
+      '--mode=live-testnet',
+      '--confirm-live-testnet',
+      '--with-fixture-clients',
+    ])).to.throw('--with-fixture-clients is only supported in fixture mode')
+      .with.property('code', 'CONFIG_FIXTURE_CLIENTS_MODE_MISMATCH');
   });
 
   it('buildSafeEnvSummary stores booleans and safe values, not raw secrets', function () {
@@ -109,6 +130,8 @@ describe('CIST config / RunContext', function () {
       mlServiceUrl: 'http://127.0.0.1:8000/evaluate',
       rpcUrlSet: true,
       operatorPrivateKeySet: true,
+      broadcasterPrivateKeySet: false,
+      deployerPrivateKeySet: false,
       pilotEscrowAddressSet: true,
       venomRegistryAddressSet: true
     });
@@ -155,6 +178,7 @@ describe('CIST config / RunContext', function () {
 
     expect(context.mode).to.equal(MODES.FIXTURE);
     expect(context.scenario).to.equal(SCENARIOS.MIXED);
+    expect(context.withFixtureClients).to.equal(false);
     expect(context.startedAt.toISOString()).to.equal('2026-04-27T14:30:12.000Z');
 
     expect(context.paths).to.deep.equal({
@@ -183,6 +207,8 @@ describe('CIST config / RunContext', function () {
     expect(serialized).to.not.include(secret);
     expect(serialized).to.not.include('super-secret-token');
     expect(context.env.operatorPrivateKeySet).to.equal(true);
+    expect(context.env.broadcasterPrivateKeySet).to.equal(false);
+    expect(context.env.deployerPrivateKeySet).to.equal(false);
     expect(context.env.rpcUrlSet).to.equal(true);
   });
 

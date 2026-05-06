@@ -155,7 +155,8 @@ function buildJsonReport(params) {
     finishedAt = new Date(),
     releaseReadiness = { unresolved: [] },
     argv = process.argv.slice(2),
-    command = 'npm run pilot:smoke-test'
+    command = 'npm run pilot:smoke-test',
+    didNotVerify = DID_NOT_VERIFY
   } = params || {};
 
   validateRunContext(runContext);
@@ -193,7 +194,7 @@ function buildJsonReport(params) {
     releaseReadiness: {
       unresolved: Array.isArray(releaseReadiness.unresolved) ? releaseReadiness.unresolved : []
     },
-    didNotVerify: [...DID_NOT_VERIFY]
+    didNotVerify: [...didNotVerify]
   };
 
   assertReportHasNoSecrets(report);

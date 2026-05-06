@@ -8,7 +8,7 @@ Run a Base Sepolia testnet oracle node for VENOM Node.
 git clone https://github.com/realVenomNetwork/venom-node.git
 cd venom-node
 cp .env.example .env
-# Edit .env with RPC_URL, DEPLOYER_PRIVATE_KEY, VENOM_REGISTRY_ADDRESS, and PILOT_ESCROW_ADDRESS.
+# Edit .env with RPC_URL, OPERATOR_PRIVATE_KEY, VENOM_REGISTRY_ADDRESS, and PILOT_ESCROW_ADDRESS.
 docker compose up -d --build
 ```
 
@@ -30,12 +30,14 @@ The node will:
 
 ```env
 RPC_URL=https://base-sepolia-rpc.publicnode.com
-DEPLOYER_PRIVATE_KEY=
+OPERATOR_PRIVATE_KEY=
 VENOM_REGISTRY_ADDRESS=
 PILOT_ESCROW_ADDRESS=
+IPFS_GATEWAYS=https://ipfs.io/ipfs,https://dweb.link/ipfs,https://gateway.pinata.cloud/ipfs
+ML_SERVICE_API_KEY=<random-strong-secret>
 ```
 
-Use a dedicated low-balance hot wallet. Do not use a primary wallet or cold-storage key.
+Use a dedicated low-balance hot wallet. Do not use a primary wallet, cold-storage key, or the deployment key. `DEPLOYER_PRIVATE_KEY` is deploy-only and the operator runtime rejects it.
 
 ## Monitoring
 
@@ -49,8 +51,22 @@ docker compose logs -f ml-service
 - Stake required by the current registry: `1 ETH` on testnet.
 - Current slash amount: `5%` of registered stake for score deviation beyond `MAX_DEVIATION`.
 - Operator bounty payouts are not implemented in the active `PilotEscrow` contract. The current campaign bounty is returned to the campaign recipient recorded at funding time, which is currently the funder.
-- Unstaking is not implemented. Treat testnet stake as locked for this release candidate.
+- Unstaking is implemented with `requestUnstake()` followed by `finalizeUnstake()` after a 7-day cooldown. An oracle can still be slashed during the cooldown, and slashed oracles cannot re-register after finalization.
 
 ## Security Notice
 
 Running a modified node that signs invalid scores can cause the oracle to be marked inactive and slashed by the on-chain median consensus path. Contracts are unaudited and testnet-only.
+
+## Before Staking
+
+- Confirm the network is Base Sepolia, chainId `84532`.
+- Run `npm run doctor`, `npm run compile`, `npm test`, and `npm run test:cist`.
+- Confirm `IPFS_GATEWAYS` and `ML_SERVICE_API_KEY` are set.
+- Set `PREFLIGHT_IPFS_CID` and `PREFLIGHT_IPFS_SHA256` to a small known public payload.
+- Confirm `DEPLOYER_PRIVATE_KEY` is not present in the operator environment.
+- Confirm at least 5 active oracles before funding a campaign against the default escrow constants.
+- Run the read-only live preflight before funding:
+
+```bash
+npm run pilot:preflight -- --network=base-sepolia
+```

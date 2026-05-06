@@ -37,8 +37,11 @@ contract CouncilRegistry is Ownable {
     bytes32[] public branchList;
 
     // Global rotating council (top N from each major branch)
+    uint256 public constant COUNCIL_ROTATION_TIMELOCK = 48 hours;
     uint256 public councilSizePerBranch = 3;
     address[] public currentCouncil;
+    address[] public pendingCouncil;
+    uint256 public pendingCouncilExecutableAt;
 
     // Attestation tracking (generalized, not creed-specific)
     mapping(address => mapping(address => uint256)) public attestationCount; // from -> to
@@ -52,6 +55,8 @@ contract CouncilRegistry is Ownable {
     event ValidatorRemoved(bytes32 indexed branchId, address indexed validator);
     event AttestationGiven(address indexed from, address indexed to, uint256 newCount);
     event CouncilRotated(address[] newCouncil);
+    event CouncilRotationScheduled(address[] newCouncil, uint256 executableAt);
+    event CouncilRotationCancelled();
     event BranchTopValidatorsUpdated(bytes32 indexed branchId, address[] validators);
 
     constructor() Ownable(msg.sender) {}
@@ -100,11 +105,70 @@ contract CouncilRegistry is Ownable {
 
     // === ROTATING COUNCIL (merit + attestation based) ===
     function rotateCouncil() external onlyOwner {
-        revert("Not implemented");
+        uint256 maxCouncilSize = branchList.length * councilSizePerBranch;
+        require(maxCouncilSize > 0, "No branches registered");
+
+        address[] memory proposedCouncil = new address[](maxCouncilSize);
+        uint256 proposedCount = 0;
+
+        for (uint256 i = 0; i < branchList.length; i++) {
+            bytes32 branchId = branchList[i];
+            address[] storage topValidators = branchTopValidators[branchId];
+            uint256 selectedForBranch = 0;
+
+            for (uint256 j = 0; j < topValidators.length && selectedForBranch < councilSizePerBranch; j++) {
+                address validator = topValidators[j];
+                if (
+                    validator != address(0) &&
+                    branches[branchId].isValidator[validator] &&
+                    !_containsAddress(proposedCouncil, proposedCount, validator)
+                ) {
+                    proposedCouncil[proposedCount] = validator;
+                    proposedCount += 1;
+                    selectedForBranch += 1;
+                }
+            }
+        }
+
+        require(proposedCount > 0, "No eligible top validators");
+
+        delete pendingCouncil;
+        for (uint256 i = 0; i < proposedCount; i++) {
+            pendingCouncil.push(proposedCouncil[i]);
+        }
+        pendingCouncilExecutableAt = block.timestamp + COUNCIL_ROTATION_TIMELOCK;
+
+        emit CouncilRotationScheduled(pendingCouncil, pendingCouncilExecutableAt);
+    }
+
+    function executeCouncilRotation() external onlyOwner {
+        require(pendingCouncil.length > 0, "No pending council");
+        require(block.timestamp >= pendingCouncilExecutableAt, "Council rotation timelock active");
+
+        address[] memory newCouncil = pendingCouncil;
+        currentCouncil = newCouncil;
+        delete pendingCouncil;
+        pendingCouncilExecutableAt = 0;
+
+        emit CouncilRotated(newCouncil);
+    }
+
+    function cancelCouncilRotation() external onlyOwner {
+        require(pendingCouncil.length > 0, "No pending council");
+        delete pendingCouncil;
+        pendingCouncilExecutableAt = 0;
+        emit CouncilRotationCancelled();
     }
 
     function setCurrentCouncil(address[] calldata newCouncil) external onlyOwner {
+        require(currentCouncil.length == 0, "Use timelocked rotation");
         require(newCouncil.length > 0, "Empty council");
+        for (uint256 i = 0; i < newCouncil.length; i++) {
+            require(newCouncil[i] != address(0), "Zero address");
+            for (uint256 j = 0; j < i; j++) {
+                require(newCouncil[j] != newCouncil[i], "Duplicate council member");
+            }
+        }
         currentCouncil = newCouncil;
         emit CouncilRotated(newCouncil);
     }
@@ -112,6 +176,13 @@ contract CouncilRegistry is Ownable {
     // === TOP VALIDATORS PER BRANCH (for AgreementFactory) ===
     function setBranchTopValidators(bytes32 branchId, address[] calldata validators) external onlyOwner {
         require(bytes(branches[branchId].name).length > 0, "Branch not registered");
+        for (uint256 i = 0; i < validators.length; i++) {
+            require(validators[i] != address(0), "Zero address");
+            require(branches[branchId].isValidator[validators[i]], "Top validator not in branch");
+            for (uint256 j = 0; j < i; j++) {
+                require(validators[j] != validators[i], "Duplicate top validator");
+            }
+        }
         branchTopValidators[branchId] = validators;
         emit BranchTopValidatorsUpdated(branchId, validators);
     }
@@ -129,6 +200,10 @@ contract CouncilRegistry is Ownable {
         return currentCouncil;
     }
 
+    function getPendingCouncil() external view returns (address[] memory) {
+        return pendingCouncil;
+    }
+
     function getTrustScore(address validator) external view returns (uint256) {
         return totalAttestationsReceived[validator];
     }
@@ -137,5 +212,18 @@ contract CouncilRegistry is Ownable {
     function getBranch(bytes32 branchId) external view returns (string memory name, address[] memory validators) {
         Branch storage b = branches[branchId];
         return (b.name, b.validators);
+    }
+
+    function _containsAddress(
+        address[] memory values,
+        uint256 length,
+        address candidate
+    ) private pure returns (bool) {
+        for (uint256 i = 0; i < length; i++) {
+            if (values[i] == candidate) {
+                return true;
+            }
+        }
+        return false;
     }
 }

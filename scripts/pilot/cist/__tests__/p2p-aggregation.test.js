@@ -12,6 +12,7 @@ const {
   assertWorkerDecisionShape,
   buildAggregationMessage,
   normalizeOracleSignature,
+  summarizeOracleSignature,
   runP2pAggregation,
 } = require('../phases/p2p-aggregation');
 
@@ -117,6 +118,26 @@ describe('CIST Phase 7: P2P / signature aggregation', function () {
 
     expect(normalized.address).to.equal(wallet.address);
     expect(normalized.signature).to.equal(signature);
+  });
+
+  it('summarizeOracleSignature does not store raw signature material', async function () {
+    const wallet = Wallet.createRandom();
+    const message = buildAggregationMessage(makeContext(), {
+      chainId: HARDHAT_CHAIN_ID,
+      workerDecision: makeWorkerDecision(),
+    });
+    const normalized = normalizeOracleSignature({
+      oracleId: 'oracle-1',
+      address: wallet.address,
+      signature: await wallet.signMessage(message),
+    });
+
+    expect(summarizeOracleSignature(normalized)).to.deep.equal({
+      oracleId: 'oracle-1',
+      address: wallet.address,
+      signaturePresent: true,
+      signatureBytes: 65,
+    });
   });
 
   it('normalizeOracleSignature rejects invalid signature-shaped output', function () {
@@ -289,6 +310,8 @@ describe('CIST Phase 7: P2P / signature aggregation', function () {
       validSignatures: 3,
     });
     expect(result.signatures).to.have.length(3);
+    expect(result.signatures[0]).to.have.property('signaturePresent', true);
+    expect(result.signatures[0]).to.not.have.property('signature');
     expect(validatePhaseResult(result)).to.equal(true);
   });
 

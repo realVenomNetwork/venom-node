@@ -14,6 +14,7 @@ class MultiRpcProvider {
     this.maxRetries = options.maxRetries || 3;
     this.timeout = options.timeout || 15000;
     this.healthCheckInterval = options.healthCheckInterval || HEALTH_CHECK_INTERVAL;
+    this.healthCheckTimer = null;
 
     this.providerStatus = urls.map((url) => ({
       failures: 0,
@@ -34,6 +35,20 @@ class MultiRpcProvider {
     this._startHealthChecks();
 
     console.log(`[MultiRPC] Initialized with ${urls.length} providers`);
+  }
+
+  async _withTimeout(promise, timeoutMs, message) {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   _createProvider(url) {
@@ -65,13 +80,11 @@ class MultiRpcProvider {
       try {
         const provider = this.providers[this.currentIndex];
 
-        const result = await Promise.race([
+        const result = await this._withTimeout(
           provider[method](...args),
-          new Promise((_, reject) => {
-            const id = setTimeout(() => reject(new Error("RPC Timeout")), this.timeout);
-            return () => clearTimeout(id);
-          })
-        ]);
+          this.timeout,
+          "RPC Timeout"
+        );
 
         this.providerStatus[this.currentIndex].failures = 0;
         this.providerStatus[this.currentIndex].healthy = true;
@@ -105,7 +118,7 @@ class MultiRpcProvider {
   }
 
   _startHealthChecks() {
-    setInterval(() => {
+    this.healthCheckTimer = setInterval(() => {
       const now = Date.now();
       for (let i = 0; i < this.providers.length; i++) {
         const status = this.providerStatus[i];
@@ -118,12 +131,11 @@ class MultiRpcProvider {
 
   async _checkProviderHealth(index) {
     try {
-      await Promise.race([
+      await this._withTimeout(
         this.providers[index].getBlockNumber(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Health check timeout")), 5000)
-        )
-      ]);
+        5000,
+        "Health check timeout"
+      );
       this.providerStatus[index].failures = 0;
       this.providerStatus[index].healthy = true;
       console.log(`[MultiRPC] Provider ${this.urls[index]} recovered`);
@@ -154,6 +166,17 @@ class MultiRpcProvider {
 
   async call(...args) {
     return this._callWithFallback("call", ...args);
+  }
+
+  close() {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
+    }
+  }
+
+  destroy() {
+    this.close();
   }
 }
 

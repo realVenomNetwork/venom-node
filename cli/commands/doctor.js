@@ -11,7 +11,7 @@ const REQUIRED_ENV = Object.freeze([
 ]);
 
 function hasOperatorKey(env) {
-  return Boolean(env.OPERATOR_PRIVATE_KEY || env.BROADCASTER_PRIVATE_KEY || env.DEPLOYER_PRIVATE_KEY);
+  return Boolean(env.OPERATOR_PRIVATE_KEY);
 }
 
 function line(status, message) {
@@ -51,9 +51,13 @@ async function run() {
   }
 
   if (hasOperatorKey(process.env)) {
-    line("PASS", "Operator private key is configured");
+    line("PASS", "OPERATOR_PRIVATE_KEY is configured");
   } else {
-    line("WARN", "No OPERATOR_PRIVATE_KEY, BROADCASTER_PRIVATE_KEY, or DEPLOYER_PRIVATE_KEY is set");
+    line("WARN", "OPERATOR_PRIVATE_KEY is not set");
+  }
+
+  if (process.env.DEPLOYER_PRIVATE_KEY) {
+    line("WARN", "DEPLOYER_PRIVATE_KEY is deploy-only and is rejected by the operator runtime");
   }
 
   const vocabularyPath = path.join(root, "vocabulary", "vocabulary.json");

@@ -227,6 +227,42 @@ const CODES = Object.freeze({
     severity: SEVERITY.FAIL,
     phase: PHASE.P2P
   },
+  PREFLIGHT_ACTIVE_ORACLE_COUNT_LOW: {
+    code: 'PREFLIGHT_ACTIVE_ORACLE_COUNT_LOW',
+    summary: 'Live preflight found fewer active oracles than PilotEscrow requires.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.P2P
+  },
+  PREFLIGHT_OPERATOR_BALANCE_LOW: {
+    code: 'PREFLIGHT_OPERATOR_BALANCE_LOW',
+    summary: 'Live preflight found the operator wallet below the stake/gas/buffer balance gate.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.P2P
+  },
+  PREFLIGHT_P2P_DIALBACK_DEFERRED: {
+    code: 'PREFLIGHT_P2P_DIALBACK_DEFERRED',
+    summary: 'Live preflight did not run an external P2P dial-back probe.',
+    severity: SEVERITY.WARN,
+    phase: PHASE.P2P
+  },
+  PREFLIGHT_P2P_DIALBACK_MISSING: {
+    code: 'PREFLIGHT_P2P_DIALBACK_MISSING',
+    summary: 'Live preflight required P2P dial-back but PUBLIC_MULTIADDR or the probe URL was missing.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.P2P
+  },
+  PREFLIGHT_P2P_DIALBACK_FAILED: {
+    code: 'PREFLIGHT_P2P_DIALBACK_FAILED',
+    summary: 'Live preflight external P2P dial-back probe failed.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.P2P
+  },
+  PREFLIGHT_LIVE_GATE_UNEXPECTED: {
+    code: 'PREFLIGHT_LIVE_GATE_UNEXPECTED',
+    summary: 'Live preflight gate evaluation failed unexpectedly.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.P2P
+  },
   REPORT_WRITE_FAILED: {
     code: 'REPORT_WRITE_FAILED',
     summary: 'CIST could not write one or more report artifacts.',

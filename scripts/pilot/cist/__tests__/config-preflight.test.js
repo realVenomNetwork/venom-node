@@ -100,6 +100,16 @@ describe('CIST config-preflight phase (phase 1)', function () {
       expect(missing).to.deep.equal([]);
     });
 
+    it('accepts RPC_URLS in place of RPC_URL for live-testnet', function () {
+      const missing = findMissingRequiredEnv('live-testnet', {
+        RPC_URLS: 'http://x,http://y',
+        OPERATOR_PRIVATE_KEY: '0xabc',
+        PILOT_ESCROW_ADDRESS: '0x0000000000000000000000000000000000000001',
+        VENOM_REGISTRY_ADDRESS: '0x0000000000000000000000000000000000000002',
+      });
+      expect(missing).to.deep.equal([]);
+    });
+
     it('treats unknown modes as having no required env', function () {
       expect(findMissingRequiredEnv('unknown-mode', {})).to.deep.equal([]);
     });

@@ -27,7 +27,7 @@ services:
         redis-server --appendonly yes --aclfile /tmp/users.acl
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli --user venom_node --pass \"$${REDIS_PASSWORD:-venom_dash_dev_password}\" ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -41,6 +41,7 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       - TF_ENABLE_ONEDNN_OPTS=0
+      - VENOM_RUNTIME_MODE=${VENOM_RUNTIME_MODE:-testnet}
       - ML_SERVICE_API_KEY=${ML_SERVICE_API_KEY:-}
     restart: unless-stopped
     deploy:
@@ -68,8 +69,8 @@ services:
     container_name: venom-node
     environment:
       - NODE_ENV=production
-      - VENOM_RUNTIME_MODE=testnet
-      - USE_TEST_PAYLOAD=false
+      - VENOM_RUNTIME_MODE=${VENOM_RUNTIME_MODE:-testnet}
+      - USE_TEST_PAYLOAD=${USE_TEST_PAYLOAD:-false}
       - HEALTH_PORT=3000
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -100,8 +101,8 @@ services:
         required: false
     environment:
       - NODE_ENV=production
-      - VENOM_RUNTIME_MODE=testnet
-      - USE_TEST_PAYLOAD=false
+      - VENOM_RUNTIME_MODE=${VENOM_RUNTIME_MODE:-testnet}
+      - USE_TEST_PAYLOAD=${USE_TEST_PAYLOAD:-false}
       - DASHBOARD_HOST=127.0.0.1
       - DASHBOARD_PORT=8787
       - DASHBOARD_REDIS_HOST=redis

@@ -10,6 +10,7 @@ const {
   makeSkippedPhaseResult,
   runCistPhases,
   effectiveState,
+  buildFixtureClientOptions,
 } = require('../../smoke-test');
 
 const { STATE, PHASES, validatePhaseResult } = require('../phases');
@@ -84,6 +85,50 @@ describe('CIST smoke-test orchestrator skeleton', function () {
     }
 
     expect(phases.map((result) => result.index)).to.deep.equal([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(releaseReadiness).to.deep.equal({ unresolved: [] });
+  });
+
+  it('strict mode reports missing real clients through the normal 8-phase report path', async function () {
+    const { phases, releaseReadiness } = await runCistPhases(makeContext({ strict: true }), {
+      env: {},
+    });
+
+    expect(phases).to.have.length(8);
+    expect(phases[0].state).to.equal(STATE.FAIL);
+    expect(phases[0].codes).to.deep.equal(['STRICT_MODE_MISSING_CLIENTS']);
+    expect(phases[0].notes.join(' ')).to.include('provider');
+    expect(phases[0].notes.join(' ')).to.include('worker');
+
+    for (const result of phases.slice(1, 7)) {
+      expect(result.state).to.equal(STATE.SKIP);
+      expect(result.notes).to.deep.equal([
+        'Skipped because Strict mode dependency preflight failed.',
+      ]);
+      expect(validatePhaseResult(result)).to.equal(true);
+    }
+
+    expect(phases[7].state).to.equal(STATE.PASS);
+    expect(releaseReadiness).to.deep.equal({ unresolved: [] });
+  });
+
+  it('fixture clients produce a PASS CIST report path for CI gating', async function () {
+    const context = makeContext();
+    const { phases, releaseReadiness } = await runCistPhases(context, {
+      env: {},
+      ...buildFixtureClientOptions(context),
+    });
+
+    expect(phases).to.have.length(8);
+    expect(phases.map((phase) => phase.state)).to.deep.equal([
+      STATE.PASS,
+      STATE.PASS,
+      STATE.PASS,
+      STATE.PASS,
+      STATE.PASS,
+      STATE.PASS,
+      STATE.PASS,
+      STATE.PASS,
+    ]);
     expect(releaseReadiness).to.deep.equal({ unresolved: [] });
   });
 

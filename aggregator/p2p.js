@@ -33,6 +33,8 @@ let registryContract;
 let pilotEscrowContract;
 const locallyClosedCampaigns = new Set();
 const peerRateLimits = new Map();
+let warnedMissingConnectionApi = false;
+let warnedMissingOracleList = false;
 
 const SCORE_TYPES = {
   Score: [
@@ -173,14 +175,19 @@ async function startP2PNode(wallet) {
     streamMuxers: [yamux()],
     services: {
       identify: identify(),
-      pubsub: gossipsub({ allowPublishToZeroPeers: true })
+      pubsub: gossipsub({
+        allowPublishToZeroPeers: true,
+        emitSelf: true
+      })
     }
   });
 
   myPeerId = libp2p.peerId.toString();
   console.log(`VENOM P2P node started: ${myPeerId}`);
 
-  for (const addr of multiaddrs) {
+  for (let index = 0; index < multiaddrs.length; index++) {
+    const addr = multiaddrs[index];
+    if (isLocalOraclePeer(operators[index], addr)) continue;
     if (addr && addr.length > 0) {
       try {
         await libp2p.dial(multiaddr(addr));
@@ -222,16 +229,56 @@ async function startP2PNode(wallet) {
   return libp2p;
 }
 
-async function ensurePeersConnected(multiaddrs) {
+function normalizeIterable(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value[Symbol.iterator] === 'function') return Array.from(value);
+  return null;
+}
+
+function peerIdFromMultiaddr(addr) {
+  const match = String(addr || '').match(/\/p2p\/([^/]+)/);
+  return match ? match[1] : null;
+}
+
+function isLocalOraclePeer(operator, addr) {
+  if (operator && myWallet && operator.toLowerCase() === myWallet.address.toLowerCase()) return true;
+  const peerId = peerIdFromMultiaddr(addr);
+  return Boolean(peerId && myPeerId && peerId === myPeerId);
+}
+
+async function ensurePeersConnected(multiaddrs, operators = []) {
   if (!libp2p) return;
+  const targetMultiaddrs = normalizeIterable(multiaddrs);
+  if (!targetMultiaddrs) {
+    if (!warnedMissingOracleList) {
+      console.log("[P2P] Active oracle multiaddr list unavailable; skipping peer reconnect");
+      warnedMissingOracleList = true;
+    }
+    return;
+  }
+
   const connectedAddrs = new Set();
-  for (const conn of libp2p.connections.values()) {
-    for (const addr of conn.remoteAddr.toString().split(',')) {
+  const connections = typeof libp2p.getConnections === 'function'
+    ? libp2p.getConnections()
+    : (libp2p.connections && typeof libp2p.connections.values === 'function'
+        ? Array.from(libp2p.connections.values())
+        : []);
+  if (connections.length === 0 && !libp2p.getConnections && !libp2p.connections && !warnedMissingConnectionApi) {
+    console.log("[P2P] libp2p connection list unavailable; peer reconnect will dial configured oracle multiaddrs");
+    warnedMissingConnectionApi = true;
+  }
+
+  for (const conn of connections) {
+    const remoteAddr = conn.remoteAddr && conn.remoteAddr.toString ? conn.remoteAddr.toString() : "";
+    for (const addr of remoteAddr.split(',')) {
       connectedAddrs.add(addr);
     }
   }
 
-  for (const addr of multiaddrs) {
+  const { multiaddr } = await loadLibp2pModules();
+  for (let index = 0; index < targetMultiaddrs.length; index++) {
+    const addr = targetMultiaddrs[index];
+    if (isLocalOraclePeer(operators[index], addr)) continue;
     if (addr && addr.length > 0 && !connectedAddrs.has(addr)) {
       try {
         await libp2p.dial(multiaddr(addr));
@@ -245,15 +292,25 @@ async function ensurePeersConnected(multiaddrs) {
 
 async function refreshActiveOracles() {
   if (!registryContract) throw new Error("P2P registry contract not initialized");
-  const [operators, multiaddrs] = await registryContract.getActiveOracles();
+  const [operatorResult, multiaddrResult] = await registryContract.getActiveOracles();
+  const operators = normalizeIterable(operatorResult);
+  const multiaddrs = normalizeIterable(multiaddrResult);
+  if (!operators) {
+    if (!warnedMissingOracleList) {
+      console.log("[P2P] Active oracle list unavailable; keeping previous active oracle cache");
+      warnedMissingOracleList = true;
+    }
+    await loadQuorumConstants();
+    return { operators: [], multiaddrs: [] };
+  }
   activeOracleCount = Math.max(operators.length, 1);
   activeOracleAddresses = new Set(operators.map((operator) => operator.toLowerCase()));
   console.log(`[P2P] Found ${operators.length} active oracles on-chain`);
 
-  await ensurePeersConnected(multiaddrs);
+  await ensurePeersConnected(multiaddrs, operators);
   await loadQuorumConstants();
 
-  return { operators, multiaddrs };
+  return { operators, multiaddrs: multiaddrs || [] };
 }
 
 function normalizeAbstainReason(reason) {

@@ -29,7 +29,7 @@ const SUPPORTED_NETWORKS = Object.freeze({
 const REGISTRY_ABI = Object.freeze([
   'function activeOracleCount() view returns (uint256)',
   'function MIN_STAKE() view returns (uint256)',
-  'function oracles(address) view returns (uint256 stake, bool active, uint256 registeredAt, string multiaddr)',
+  'function oracles(address) view returns (address operator, uint256 stake, uint256 scoreCount, uint256 lastActive, bool active, string multiaddr)',
 ]);
 
 const ESCROW_ABI = Object.freeze([
@@ -552,7 +552,7 @@ function buildRedisConnection(env) {
   const redis = new IORedis({
     host: env.REDIS_HOST || '127.0.0.1',
     port: Number(env.REDIS_PORT || 6379),
-    username: env.REDIS_USERNAME || undefined,
+    username: env.REDIS_USERNAME || 'venom_node',
     password: env.REDIS_PASSWORD || undefined,
     tls: env.REDIS_TLS === 'true' ? {} : undefined,
     db: Number(env.CIST_REDIS_DB || 14),

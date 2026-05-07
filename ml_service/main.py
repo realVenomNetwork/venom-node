@@ -39,6 +39,7 @@ logging.basicConfig(
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger("venom.ml_service")
+ML_SERVICE_API_KEY_SENTINEL = "replace-me-with-a-random-32-byte-hex-value"
 
 # API Key authentication
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -48,6 +49,15 @@ def requires_api_key() -> bool:
     runtime_mode = os.getenv("VENOM_RUNTIME_MODE", "").strip().lower()
     node_env = os.getenv("NODE_ENV", "").strip().lower()
     return runtime_mode in {"testnet", "mainnet"} or node_env == "production"
+
+def validate_ml_service_api_key() -> None:
+    configured_key = os.getenv("ML_SERVICE_API_KEY", "").strip()
+    if not requires_api_key():
+        return
+    if not configured_key:
+        raise RuntimeError("ML_SERVICE_API_KEY is required in testnet/mainnet mode")
+    if configured_key == ML_SERVICE_API_KEY_SENTINEL:
+        raise RuntimeError("ML_SERVICE_API_KEY is still set to the .env.example sentinel; replace it with a random strong secret")
 
 async def verify_api_key(api_key: str = Security(API_KEY_HEADER)):
     expected_key = os.getenv("ML_SERVICE_API_KEY")
@@ -105,6 +115,7 @@ class EvaluateResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Starting [ML Service] startup...")
+    validate_ml_service_api_key()
     print(f"   Loading semantic model: {SEMANTIC_MODEL_NAME}")
 
     # Load model into global state (this is the key optimization)

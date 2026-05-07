@@ -27,6 +27,25 @@ async function maybeVerify(address, constructorArguments) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readWithRetry(description, readFn, isExpected, options = {}) {
+  const attempts = options.attempts || 6;
+  const delayMs = options.delayMs || 2000;
+  let lastValue;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    lastValue = await readFn();
+    if (isExpected(lastValue)) return lastValue;
+    if (attempt < attempts) {
+      console.warn(`[Deploy] ${description} not yet visible (attempt ${attempt}/${attempts}); retrying in ${delayMs}ms`);
+      await sleep(delayMs);
+    }
+  }
+  return lastValue;
+}
+
 async function main() {
   const [deployer] = await hre.ethers.getSigners();
   console.log("Deploying Phase 4 contracts with account:", deployer.address);
@@ -56,11 +75,15 @@ async function main() {
 
   // 3. Set PilotEscrow in Registry
   const bindTx = await venomRegistry.setPilotEscrow(pilotEscrowAddress);
-  const bindReceipt = await bindTx.wait();
+  const bindReceipt = await bindTx.wait(3);
   console.log("PilotEscrow address set in VenomRegistry");
 
-  const [boundEscrow, pendingEscrow, registryOwner, escrowOwner, escrowRegistry] = await Promise.all([
-    venomRegistry.pilotEscrow(),
+  const boundEscrow = await readWithRetry(
+    "Registry PilotEscrow bind",
+    () => venomRegistry.pilotEscrow(),
+    (value) => value.toLowerCase() === pilotEscrowAddress.toLowerCase()
+  );
+  const [pendingEscrow, registryOwner, escrowOwner, escrowRegistry] = await Promise.all([
     venomRegistry.pendingPilotEscrow(),
     venomRegistry.owner(),
     pilotEscrow.owner(),

@@ -39,6 +39,8 @@ ML_SERVICE_API_KEY=<random-strong-secret>
 
 Use a dedicated low-balance hot wallet. Do not use a primary wallet, cold-storage key, or the deployment key. `DEPLOYER_PRIVATE_KEY` is deploy-only and the operator runtime rejects it.
 
+For solo, non-production tests on machines without public P2P reachability, set `VENOM_ALLOW_PRIVATE_MULTIADDR=true` to register the node's private libp2p multiaddr. The node logs a warning when this path is used. Do not use it for production pilots; production operators should configure `PUBLIC_MULTIADDR` or port forwarding so other oracles can dial the node.
+
 ## Monitoring
 
 ```bash
@@ -62,6 +64,7 @@ Running a modified node that signs invalid scores can cause the oracle to be mar
 - Confirm the network is Base Sepolia, chainId `84532`.
 - Run `npm run doctor`, `npm run compile`, `npm test`, and `npm run test:cist`.
 - Confirm `IPFS_GATEWAYS` and `ML_SERVICE_API_KEY` are set.
+- Confirm `ML_SERVICE_API_KEY` is not the `.env.example` sentinel value.
 - Set `PREFLIGHT_IPFS_CID` and `PREFLIGHT_IPFS_SHA256` to a small known public payload.
 - Confirm `DEPLOYER_PRIVATE_KEY` is not present in the operator environment.
 - Confirm at least 5 active oracles before funding a campaign against the default escrow constants.

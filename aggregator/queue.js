@@ -8,7 +8,7 @@ require("dotenv").config({ path: rootEnvPath, quiet: true });
 
 const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
 const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
-const REDIS_USERNAME = process.env.REDIS_USERNAME || undefined;
+const REDIS_USERNAME = process.env.REDIS_USERNAME || 'venom_node';
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
 const REDIS_TLS = process.env.REDIS_TLS === 'true';
 

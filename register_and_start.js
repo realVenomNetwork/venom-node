@@ -14,6 +14,7 @@ const REQUIRED_ENV = [
   "PILOT_ESCROW_ADDRESS",
   "OPERATOR_PRIVATE_KEY"
 ];
+const ALLOW_PRIVATE_MULTIADDR = process.env.VENOM_ALLOW_PRIVATE_MULTIADDR === "true";
 
 let p2pNode = null;
 let producerHandle = null;
@@ -31,7 +32,11 @@ function validateEnv() {
 
   // Operator runtime must not have access to deployer key
   if (process.env.DEPLOYER_PRIVATE_KEY) {
-    throw new Error("DEPLOYER_PRIVATE_KEY must not be set in the operator process. Use OPERATOR_PRIVATE_KEY only.");
+    throw new Error(
+      "DEPLOYER_PRIVATE_KEY must not be set in the operator process. Use OPERATOR_PRIVATE_KEY only. " +
+      "If you just finished deploying, comment out or remove DEPLOYER_PRIVATE_KEY from .env, then run " +
+      "docker compose up -d --force-recreate venom-node."
+    );
   }
 }
 
@@ -97,6 +102,12 @@ function startHealthServer() {
   return server;
 }
 
+function warnPrivateMultiaddrOverride(multiaddr) {
+  console.warn("[P2P] VENOM_ALLOW_PRIVATE_MULTIADDR=true: registering a private or non-public multiaddr.");
+  console.warn("[P2P] This is intended only for solo test setups and must not be used for production pilots.");
+  console.warn(`[P2P] Selected non-public multiaddr: ${multiaddr}`);
+}
+
 async function main() {
   validateEnv();
   const { startP2PNode, refreshActiveOracles } = require('./aggregator/p2p');
@@ -130,16 +141,30 @@ async function main() {
     if (process.env.PUBLIC_MULTIADDR) {
       registeredMultiaddr = process.env.PUBLIC_MULTIADDR;
       console.log(`Using PUBLIC_MULTIADDR from env: ${registeredMultiaddr}`);
+      if (ALLOW_PRIVATE_MULTIADDR && isPrivateOrWildcardMultiaddr(registeredMultiaddr)) {
+        warnPrivateMultiaddrOverride(registeredMultiaddr);
+      }
     } else {
       const reachable = multiaddrs.filter(m => !isPrivateOrWildcardMultiaddr(m));
       if (reachable.length === 0) {
-        await p2pNode.stop();
-        p2pNode = null;
-        throw new Error("No public multiaddr found. Set PUBLIC_MULTIADDR env var or configure port forwarding. libp2p returned: " + multiaddrs.map(m => m.toString()).join(', '));
+        if (ALLOW_PRIVATE_MULTIADDR && multiaddrs.length > 0) {
+          const privateMultiaddr = multiaddrs.find(m => m.toString().includes('/tcp/')) || multiaddrs[0];
+          registeredMultiaddr = privateMultiaddr.toString();
+          warnPrivateMultiaddrOverride(registeredMultiaddr);
+        } else {
+          await p2pNode.stop();
+          p2pNode = null;
+          throw new Error(
+            "No public multiaddr found. Set PUBLIC_MULTIADDR env var or configure port forwarding. " +
+            "For solo non-production tests only, set VENOM_ALLOW_PRIVATE_MULTIADDR=true to register a private multiaddr. " +
+            "libp2p returned: " + multiaddrs.map(m => m.toString()).join(', ')
+          );
+        }
+      } else {
+        const publicMultiaddr = reachable.find(m => m.toString().includes('/tcp/')) || reachable[0];
+        registeredMultiaddr = publicMultiaddr.toString();
+        console.log(`Auto-detected public multiaddr: ${registeredMultiaddr}`);
       }
-      const publicMultiaddr = reachable.find(m => m.toString().includes('/tcp/')) || reachable[0];
-      registeredMultiaddr = publicMultiaddr.toString();
-      console.log(`Auto-detected public multiaddr: ${registeredMultiaddr}`);
     }
 
     console.log(`Registering node with multiaddr: ${registeredMultiaddr}`);

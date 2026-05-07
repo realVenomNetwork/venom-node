@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -14,6 +14,7 @@ COPY --chown=node:node data/ ./data/
 COPY --chown=node:node dashboard/ ./dashboard/
 COPY --chown=node:node cli/ ./cli/
 COPY --chown=node:node vocabulary/ ./vocabulary/
+RUN mkdir -p /app/.venom-artifacts && chown -R node:node /app/.venom-artifacts
 USER node
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

@@ -31,11 +31,25 @@ Source reports reviewed: Multiple internal review reports across iterative revie
 
 ## Next Iteration Candidates
 
+### Canary 01.5 Integration Findings
+
+| ID | Status | Follow-up |
+|---|---|---|
+| MF-1 | Closed in integration PR 7 | Keep runtime quorum reads fail-closed. If `PilotEscrow` constants cannot be read, the aggregator must not fall back to optimistic defaults before aggregate submission. |
+| MF-2 | Closed in integration PR 7 | Preserve leader failover behavior under timeout so a later eligible signer can submit when the first leader stalls. |
+| MF-3 | Closed in integration PR 7 | Keep off-chain aggregation gates aligned with configurable on-chain quorum constants, including required score count, score quorum percentage, and participation floor. |
+| MF-4 | Closed in integration PR 3 | Treat generated canary operator envs, manifests, funding targets, and compose files as artifacts. Keep `.venom-canary/` ignored and regenerate per run. |
+| MF-5 | Closed in integration PR 4 | Skip the legacy single-operator Phase 7 P2P preflight when `--canary-envs` is active; Phase 9 owns multi-operator readiness. |
+| MF-6 | Closed in integration PR 2 | Keep BullMQ queue names using the hyphenated operator suffix form, while Redis keys continue using colon separators. BullMQ rejects colon-bearing queue names. |
+| MF-7 | Deferred to Canary 02 | Replace the Canary 01.5 bootstrap workaround with persistent per-operator libp2p keys, stable peer IDs, and a governed or operator-authenticated registry method to update oracle multiaddrs without redeploying the registry. |
+| MF-8 | Closed in integration PR 4 | Ensure live preflight queue construction honors `OPERATOR_QUEUE_SUFFIX` so multi-operator preflight validates the queue names operators actually use. |
+| MF-9 | Deferred, P3 | Consolidate canary profile constants and the queue suffix validation regex into a shared module. PR 4 intentionally localized these values to stay independent, but future edits should avoid duplicating profile policy across scripts and tests. |
+
 ### Protocol And Contract Design
 
 - Upgrade signer-set-derived off-chain leader selection to a full commit-reveal design, then VRF. The current bridge reduces funder predictability but is not a final unbiasable randomness scheme.
 - Consider optional on-chain leader enforcement only if leader gas reimbursement or stronger submitter attribution becomes necessary.
-- Implement real payload identity: campaign events need content metadata, and workers need CID/multihash verification before scoring. `HashMismatch` exists as a reason but is not yet produced.
+- Extend real payload identity beyond the current CID/content-hash path: Canary 01 proved worker-side `HashMismatch` abstains against real chain state, but multi-oracle runs still need CID/multihash behavior proven under mesh conditions and richer content metadata if the campaign model expands.
 - Address campaign UID squatting by deriving campaign IDs from funder, salt, and content hash or by adding a reservation/commit flow.
 - Add oracle unstaking and deregistration with a cooldown, slash eligibility during cooldown, and clear operator exit docs.
 - Add a slashing dispute window before slashes become withdrawable.

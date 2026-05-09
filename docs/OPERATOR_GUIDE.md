@@ -41,6 +41,10 @@ Use a dedicated low-balance hot wallet. Do not use a primary wallet, cold-storag
 
 For solo, non-production tests on machines without public P2P reachability, set `VENOM_ALLOW_PRIVATE_MULTIADDR=true` to register the node's private libp2p multiaddr. The node logs a warning when this path is used. Do not use it for production pilots; production operators should configure `PUBLIC_MULTIADDR` or port forwarding so other oracles can dial the node.
 
+## Deployment Profiles
+
+Deployments can set `DEPLOY_PROFILE=production`, `DEPLOY_PROFILE=canary-01-5`, or `DEPLOY_PROFILE=solo`. The profile selects bounded constructor values for `VenomRegistry.MIN_STAKE()` and the `PilotEscrow` quorum/timeout getters. `production` is the default when the variable is unset. Runtime operators should read the deployed contract values instead of assuming 5 required oracles or a 1 ETH stake.
+
 ## Monitoring
 
 ```bash
@@ -50,7 +54,7 @@ docker compose logs -f ml-service
 
 ## Current Economics
 
-- Stake required by the current registry: `1 ETH` on testnet.
+- Stake required by the current registry: read `VenomRegistry.MIN_STAKE()`. The default `production` deploy profile uses `1 ETH`; `canary-01-5` uses `0.1 ETH`.
 - Current slash amount: `5%` of registered stake for score deviation beyond `MAX_DEVIATION`.
 - Operator bounty payouts are not implemented in the active `PilotEscrow` contract. The current campaign bounty is returned to the campaign recipient recorded at funding time, which is currently the funder.
 - Unstaking is implemented with `requestUnstake()` followed by `finalizeUnstake()` after a 7-day cooldown. An oracle can still be slashed during the cooldown, and slashed oracles cannot re-register after finalization.
@@ -67,7 +71,7 @@ Running a modified node that signs invalid scores can cause the oracle to be mar
 - Confirm `ML_SERVICE_API_KEY` is not the `.env.example` sentinel value.
 - Set `PREFLIGHT_IPFS_CID` and `PREFLIGHT_IPFS_SHA256` to a small known public payload.
 - Confirm `DEPLOYER_PRIVATE_KEY` is not present in the operator environment.
-- Confirm at least 5 active oracles before funding a campaign against the default escrow constants.
+- Confirm active oracle count is at least `PilotEscrow.REQUIRED_ORACLES()` before funding a campaign.
 - Run the read-only live preflight before funding:
 
 ```bash

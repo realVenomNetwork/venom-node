@@ -58,6 +58,17 @@ describe("P2P leader election", function () {
       expect(SIGNERS.map((signer) => signer.toLowerCase())).to.include(leader);
     });
 
+    it("rotates only among observed score signers, not every active oracle", function () {
+      const scoreSigners = SIGNERS.slice(0, 3);
+      const validLeaders = scoreSigners.map((signer) => signer.toLowerCase());
+
+      for (let round = 0; round < 12; round++) {
+        expect(validLeaders).to.include(leaderForRound(UID, scoreSigners, round));
+      }
+      expect(leaderForRound(UID, scoreSigners, validLeaders.length))
+        .to.equal(leaderForRound(UID, scoreSigners, 0));
+    });
+
     it("rotates by one signer per round and wraps", function () {
       const sorted = [...SIGNERS].map((signer) => signer.toLowerCase()).sort();
       const round0 = leaderForRound(UID, SIGNERS, 0);

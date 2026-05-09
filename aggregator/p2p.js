@@ -2,6 +2,7 @@
 // Libp2p gossip aggregation for signed score and abstain messages.
 
 const { ethers } = require('ethers');
+const net = require('node:net');
 const { generatePostcardFromCloseReceipt } = require('../src/postcard');
 const { recordDashboardEvent } = require('../src/dashboard/quorum-replay');
 
@@ -31,6 +32,7 @@ let myWallet;
 let eip712Domain;
 let registryContract;
 let pilotEscrowContract;
+let quorumConstantsLoaded = false;
 const locallyClosedCampaigns = new Set();
 const peerRateLimits = new Map();
 let warnedMissingConnectionApi = false;
@@ -87,6 +89,16 @@ function markCampaignLocallyClosed(campaignUid) {
   locallyClosedCampaigns.add(campaignUid.toLowerCase());
 }
 
+function bootstrapPeerMultiaddr(peer) {
+  const [host, port, extra] = String(peer || '').split(':');
+  if (!host || !port || extra) return null;
+  const numericPort = Number(port);
+  if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) return null;
+  if (!/^[a-zA-Z0-9.-]+$/.test(host)) return null;
+  const protocol = net.isIP(host) === 4 ? 'ip4' : 'dns4';
+  return `/${protocol}/${host}/tcp/${numericPort}`;
+}
+
 async function loadLibp2pModules() {
   if (libp2pModules) return libp2pModules;
 
@@ -97,7 +109,8 @@ async function loadLibp2pModules() {
     noisePkg,
     yamuxPkg,
     multiaddrPkg,
-    identifyPkg
+    identifyPkg,
+    mdnsPkg
   ] = await Promise.all([
     import('libp2p'),
     import('@chainsafe/libp2p-gossipsub'),
@@ -105,7 +118,8 @@ async function loadLibp2pModules() {
     import('@chainsafe/libp2p-noise'),
     import('@chainsafe/libp2p-yamux'),
     import('@multiformats/multiaddr'),
-    import('@libp2p/identify')
+    import('@libp2p/identify'),
+    import('@libp2p/mdns')
   ]);
 
   libp2pModules = {
@@ -115,13 +129,18 @@ async function loadLibp2pModules() {
     noise: noisePkg.noise,
     yamux: yamuxPkg.yamux,
     multiaddr: multiaddrPkg.multiaddr,
-    identify: identifyPkg.identify
+    identify: identifyPkg.identify,
+    mdns: mdnsPkg.mdns
   };
   return libp2pModules;
 }
 
-async function loadQuorumConstants() {
-  if (!pilotEscrowContract) return;
+async function loadQuorumConstants(options = {}) {
+  const required = options.required === true;
+  if (!pilotEscrowContract) {
+    if (required) throw new Error("P2P PilotEscrow contract is not initialized");
+    return false;
+  }
   try {
     const [reqOracles, scoreQuorum, participationFloor] = await Promise.all([
       pilotEscrowContract.REQUIRED_ORACLES(),
@@ -131,9 +150,16 @@ async function loadQuorumConstants() {
     REQUIRED_ORACLES = Number(reqOracles);
     SCORE_QUORUM_PCT = Number(scoreQuorum);
     PARTICIPATION_FLOOR_PCT = Number(participationFloor);
+    quorumConstantsLoaded = true;
     console.log(`[P2P] Loaded quorum constants from contract: REQUIRED_ORACLES=${REQUIRED_ORACLES}, SCORE_QUORUM_PCT=${SCORE_QUORUM_PCT}, PARTICIPATION_FLOOR_PCT=${PARTICIPATION_FLOOR_PCT}`);
+    return true;
   } catch (err) {
-    console.warn(`[P2P] Failed to load quorum constants from contract, using defaults: ${err.message}`);
+    const message = `[P2P] Failed to load quorum constants from contract: ${err.message}`;
+    if (required || !quorumConstantsLoaded) {
+      throw new Error(`${message}. Refusing to continue with default quorum constants.`);
+    }
+    console.warn(`${message}. Keeping last loaded values: REQUIRED_ORACLES=${REQUIRED_ORACLES}, SCORE_QUORUM_PCT=${SCORE_QUORUM_PCT}, PARTICIPATION_FLOOR_PCT=${PARTICIPATION_FLOOR_PCT}`);
+    return false;
   }
 }
 
@@ -145,7 +171,7 @@ async function startP2PNode(wallet) {
   const pilotEscrowAddress = process.env.PILOT_ESCROW_ADDRESS;
   if (!pilotEscrowAddress) throw new Error("Missing PILOT_ESCROW_ADDRESS");
 
-  const { createLibp2p, gossipsub, tcp, noise, yamux, multiaddr, identify } = await loadLibp2pModules();
+  const { createLibp2p, gossipsub, tcp, noise, yamux, multiaddr, identify, mdns } = await loadLibp2pModules();
 
   const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
   const network = await provider.getNetwork();
@@ -164,15 +190,22 @@ async function startP2PNode(wallet) {
     "function PARTICIPATION_FLOOR_PCT() view returns (uint256)"
   ], provider);
 
-  await loadQuorumConstants();
+  await loadQuorumConstants({ required: true });
 
   const { operators, multiaddrs } = await refreshActiveOracles();
+  const listenPort = process.env.P2P_LISTEN_PORT
+    ? Number(process.env.P2P_LISTEN_PORT)
+    : 0;
+  if (process.env.P2P_LISTEN_PORT && (!Number.isInteger(listenPort) || listenPort < 1024 || listenPort > 65535)) {
+    throw new Error(`Invalid P2P_LISTEN_PORT: ${process.env.P2P_LISTEN_PORT}`);
+  }
 
   libp2p = await createLibp2p({
-    addresses: { listen: ['/ip4/0.0.0.0/tcp/0'] },
+    addresses: { listen: [`/ip4/0.0.0.0/tcp/${listenPort}`] },
     transports: [tcp()],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
+    peerDiscovery: [mdns()],
     services: {
       identify: identify(),
       pubsub: gossipsub({
@@ -186,6 +219,7 @@ async function startP2PNode(wallet) {
   console.log(`VENOM P2P node started: ${myPeerId}`);
 
   for (let index = 0; index < multiaddrs.length; index++) {
+    if (process.env.VENOM_SKIP_REGISTRY_DIAL === 'true') continue;
     const addr = multiaddrs[index];
     if (isLocalOraclePeer(operators[index], addr)) continue;
     if (addr && addr.length > 0) {
@@ -200,6 +234,24 @@ async function startP2PNode(wallet) {
 
   await libp2p.services.pubsub.subscribe(TOPIC);
   libp2p.services.pubsub.addEventListener('message', handleSignatureMessage);
+
+  const bootstrapPeers = (process.env.P2P_BOOTSTRAP_PEERS || '')
+    .split(',')
+    .map((peer) => peer.trim())
+    .filter(Boolean);
+  for (const peer of bootstrapPeers) {
+    const addr = bootstrapPeerMultiaddr(peer);
+    if (!addr) {
+      console.warn(`[P2P] Skipping malformed bootstrap peer: ${peer}`);
+      continue;
+    }
+    try {
+      await libp2p.dial(multiaddr(addr));
+      console.log(`[P2P] Bootstrap dialed ${peer}`);
+    } catch (err) {
+      console.warn(`[P2P] Bootstrap dial failed for ${peer}: ${err.message}`);
+    }
+  }
 
   leaderInterval = setInterval(checkAndSubmitIfLeader, 5000);
   oracleRefreshInterval = setInterval(() => {
@@ -277,6 +329,7 @@ async function ensurePeersConnected(multiaddrs, operators = []) {
 
   const { multiaddr } = await loadLibp2pModules();
   for (let index = 0; index < targetMultiaddrs.length; index++) {
+    if (process.env.VENOM_SKIP_REGISTRY_DIAL === 'true') continue;
     const addr = targetMultiaddrs[index];
     if (isLocalOraclePeer(operators[index], addr)) continue;
     if (addr && addr.length > 0 && !connectedAddrs.has(addr)) {
@@ -374,11 +427,17 @@ function getOrCreatePendingCampaign(campaignUid) {
 
 function leaderForRound(campaignUid, scoreSigners, round = 0) {
   if (!Array.isArray(scoreSigners) || scoreSigners.length === 0) return null;
-  const sortedActiveOracles = Array.from(activeOracleAddresses).sort();
-  if (sortedActiveOracles.length === 0) return null;
-  const seed = ethers.keccak256(ethers.concat([campaignUid, ...sortedActiveOracles]));
-  const base = Number(BigInt(seed) % BigInt(sortedActiveOracles.length));
-  return sortedActiveOracles[(base + round) % sortedActiveOracles.length];
+  if (activeOracleAddresses.size === 0) return null;
+  const sortedScoreSigners = Array.from(new Set(
+    scoreSigners
+      .map((signer) => String(signer).toLowerCase())
+      .filter((signer) => ethers.isAddress(signer))
+      .filter((signer) => activeOracleAddresses.has(signer))
+  )).sort();
+  if (sortedScoreSigners.length === 0) return null;
+  const seed = ethers.keccak256(ethers.concat([campaignUid, ...sortedScoreSigners]));
+  const base = Number(BigInt(seed) % BigInt(sortedScoreSigners.length));
+  return sortedScoreSigners[(base + round) % sortedScoreSigners.length];
 }
 
 function amILeader(campaignUid, scoreSigners, round = 0) {
@@ -717,5 +776,6 @@ module.exports = {
   __resetForTesting() {
     activeOracleCount = REQUIRED_ORACLES;
     activeOracleAddresses = new Set();
+    quorumConstantsLoaded = false;
   }
 };

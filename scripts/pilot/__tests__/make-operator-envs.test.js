@@ -9,6 +9,9 @@ const {
   MakeEnvsError,
   parseArgs,
   validateDeploymentArtifact,
+  shouldSkipRegistryDialForProfile,
+  buildBootstrapPeerString,
+  buildOperatorEnv,
   generateOperatorFiles,
 } = require('../make-operator-envs');
 
@@ -103,9 +106,9 @@ describe('make-operator-envs', function () {
       expect(envText).to.include('USE_TEST_PAYLOAD=false');
       expect(envText).to.include('DEPLOY_PROFILE=canary-01-5');
       expect(envText).to.include('VENOM_ALLOW_PRIVATE_MULTIADDR=false');
-      expect(envText).to.not.include('P2P_LISTEN_PORT=');
-      expect(envText).to.not.include('P2P_BOOTSTRAP_PEERS=');
-      expect(envText).to.not.include('VENOM_SKIP_REGISTRY_DIAL=');
+      expect(envText).to.include('VENOM_SKIP_REGISTRY_DIAL=true');
+      expect(envText).to.include(`P2P_LISTEN_PORT=${42000 + index}`);
+      expect(envText).to.include('P2P_BOOTSTRAP_PEERS=');
       expect(envText).to.not.include('DEPLOYER_PRIVATE_KEY');
     }
 
@@ -122,6 +125,55 @@ describe('make-operator-envs', function () {
     expect(compose).to.include('http://127.0.0.1:8000/health');
     expect(compose).to.not.include('http://127.0.0.1:8000/ready');
     expect(compose).to.not.include('dashboard');
+  });
+
+  it('enables registry-dial skip only for bootstrap canary profiles', function () {
+    expect(shouldSkipRegistryDialForProfile('canary-01-5')).to.equal(true);
+    expect(shouldSkipRegistryDialForProfile('production')).to.equal(false);
+    expect(shouldSkipRegistryDialForProfile('solo')).to.equal(false);
+  });
+
+  it('includes bootstrap peers and pinned port for the canary-01-5 profile', function () {
+    const out = path.join(root, '.venom-canary');
+    const composeOut = path.join(root, 'docker-compose.canary-01-5.yml');
+    generateOperatorFiles({
+      count: 5,
+      deployment: fixtureDeployment,
+      out,
+      profile: 'canary-01-5',
+      healthPortBase: 3300,
+      composeOut,
+      force: false,
+    }, { now: () => fixedDate, walletFactory, env: {} });
+
+    const envText = fs.readFileSync(path.join(out, 'operator-2', '.env'), 'utf8');
+    expect(envText).to.include('P2P_LISTEN_PORT=42002');
+    expect(envText).to.include('P2P_BOOTSTRAP_PEERS=venom-node-canary-1:42001,venom-node-canary-3:42003');
+    expect(envText).to.include('venom-node-canary-4:42004');
+    expect(envText).to.include('venom-node-canary-5:42005');
+    expect(envText).to.not.include('venom-node-canary-2:42002');
+    expect(buildBootstrapPeerString(2, 5)).to.equal(
+      'venom-node-canary-1:42001,venom-node-canary-3:42003,venom-node-canary-4:42004,venom-node-canary-5:42005'
+    );
+  });
+
+  it('omits bootstrap peers and pinned port for non-bootstrap profiles', function () {
+    const envText = buildOperatorEnv({
+      operatorIndex: 1,
+      count: 2,
+      deployment: {
+        profile: 'production',
+        registry: '0x1000000000000000000000000000000000000001',
+        escrow: '0x2000000000000000000000000000000000000002',
+      },
+      healthPort: 3000,
+      privateKey: '0xabc',
+      queueSuffix: 'op1',
+    });
+
+    expect(envText).to.not.include('VENOM_SKIP_REGISTRY_DIAL=true');
+    expect(envText).to.not.include('P2P_LISTEN_PORT=');
+    expect(envText).to.not.include('P2P_BOOTSTRAP_PEERS=');
   });
 
   it('keeps generated queue suffixes compatible with runtime queue normalization', function () {

@@ -9,16 +9,18 @@ const {
 const { isPrivateOrWildcardMultiaddr } = require("../src/utils/multiaddr");
 
 describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
+    const REGISTRY_ARGS = [ethers.parseEther("1.0"), 5, 25];
+    const ESCROW_ARGS = [5, 50, 67, 7200];
     let registry, escrow, owner, oracle1, oracle2, attacker;
 
     beforeEach(async function () {
         [owner, oracle1, oracle2, attacker] = await ethers.getSigners();
 
         const Registry = await ethers.getContractFactory("VenomRegistry");
-        registry = await Registry.deploy();
+        registry = await Registry.deploy(...REGISTRY_ARGS);
 
         const Escrow = await ethers.getContractFactory("PilotEscrow");
-        escrow = await Escrow.deploy(await registry.getAddress());
+        escrow = await Escrow.deploy(await registry.getAddress(), ...ESCROW_ARGS);
         await registry.setPilotEscrow(await escrow.getAddress());
     });
 
@@ -133,10 +135,10 @@ describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
     describe("PilotEscrow Timelock Upgrade", function () {
         it("sets PilotEscrow immediately on first call", async function () {
             const Registry2 = await ethers.getContractFactory("VenomRegistry");
-            const registry2 = await Registry2.deploy();
+            const registry2 = await Registry2.deploy(...REGISTRY_ARGS);
 
             const Escrow2 = await ethers.getContractFactory("PilotEscrow");
-            const escrow2 = await Escrow2.deploy(await registry2.getAddress());
+            const escrow2 = await Escrow2.deploy(await registry2.getAddress(), ...ESCROW_ARGS);
 
             expect(await registry2.pilotEscrow()).to.equal(ethers.ZeroAddress);
 
@@ -146,7 +148,7 @@ describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
 
         it("schedules upgrade with 48h timelock on subsequent calls", async function () {
             const Escrow2 = await ethers.getContractFactory("PilotEscrow");
-            const escrow2 = await Escrow2.deploy(await registry.getAddress());
+            const escrow2 = await Escrow2.deploy(await registry.getAddress(), ...ESCROW_ARGS);
 
             const tx = await registry.setPilotEscrow(await escrow2.getAddress());
             const rcpt = await tx.wait();
@@ -162,7 +164,7 @@ describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
 
         it("rejects executePilotEscrowUpgrade before timelock", async function () {
             const Escrow2 = await ethers.getContractFactory("PilotEscrow");
-            const escrow2 = await Escrow2.deploy(await registry.getAddress());
+            const escrow2 = await Escrow2.deploy(await registry.getAddress(), ...ESCROW_ARGS);
 
             await registry.setPilotEscrow(await escrow2.getAddress());
 
@@ -172,7 +174,7 @@ describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
 
         it("executes PilotEscrow upgrade after 48h timelock", async function () {
             const Escrow2 = await ethers.getContractFactory("PilotEscrow");
-            const escrow2 = await Escrow2.deploy(await registry.getAddress());
+            const escrow2 = await Escrow2.deploy(await registry.getAddress(), ...ESCROW_ARGS);
 
             await registry.setPilotEscrow(await escrow2.getAddress());
 

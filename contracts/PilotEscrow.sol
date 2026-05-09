@@ -19,12 +19,12 @@ contract PilotEscrow is Ownable2Step, Pausable, ReentrancyGuard {
 
     uint256 private constant MAX_SCORES = 20;
     // === v1.1.0-rc.1 parameters ===
-    uint256 public constant REQUIRED_ORACLES = 5;
-    uint256 public constant SCORE_QUORUM_PCT = 50;          // BFT majority
-    uint256 public constant PARTICIPATION_FLOOR_PCT = 67;   // supermajority of network must have seen the campaign
+    uint256 public immutable REQUIRED_ORACLES;
+    uint256 public immutable SCORE_QUORUM_PCT;          // BFT majority
+    uint256 public immutable PARTICIPATION_FLOOR_PCT;   // supermajority of network must have seen the campaign
     uint256 public constant PASS_THRESHOLD = 60;
     uint256 public constant MAX_SCORE = 100;
-    uint256 public constant CAMPAIGN_TIMEOUT_BLOCKS = 7200; // ~4h on Base at ~2s blocks
+    uint256 public immutable CAMPAIGN_TIMEOUT_BLOCKS; // ~4h on Base at ~2s blocks
     uint256 public constant CANCEL_FEE_BPS = 100;           // 1% retained on cancel
     uint256 public constant WITHDRAWAL_TIMELOCK = 48 hours;
 
@@ -71,10 +71,32 @@ contract PilotEscrow is Ownable2Step, Pausable, ReentrancyGuard {
     event InsuranceWithdrawalExecuted(address indexed recipient, uint256 amount);
     /// @notice Emitted when the owner cancels a scheduled insurance pool withdrawal.
     event InsuranceWithdrawalCancelled(address indexed recipient);
+    /// @notice Emitted when a campaign close reports an oracle score deviation to the registry.
+    event DeviationReported(bytes32 indexed campaignUid, address indexed oracle, uint256 submittedScore, uint256 medianScore, uint256 deviation);
 
-    constructor(address _registry) Ownable(msg.sender) {
+    constructor(
+        address _registry,
+        uint256 _requiredOracles,
+        uint256 _scoreQuorumPct,
+        uint256 _participationFloorPct,
+        uint256 _campaignTimeoutBlocks
+    ) Ownable(msg.sender) {
         require(_registry != address(0), "Zero registry");
+        require(_requiredOracles >= 1 && _requiredOracles <= MAX_SCORES, "Invalid REQUIRED_ORACLES");
+        require(_scoreQuorumPct >= 1 && _scoreQuorumPct <= 100, "Invalid SCORE_QUORUM_PCT");
+        require(
+            _participationFloorPct >= _scoreQuorumPct && _participationFloorPct <= 100,
+            "Invalid PARTICIPATION_FLOOR_PCT"
+        );
+        require(
+            _campaignTimeoutBlocks >= 100 && _campaignTimeoutBlocks <= 50000,
+            "Invalid CAMPAIGN_TIMEOUT_BLOCKS"
+        );
         registry = VenomRegistry(_registry);
+        REQUIRED_ORACLES = _requiredOracles;
+        SCORE_QUORUM_PCT = _scoreQuorumPct;
+        PARTICIPATION_FLOOR_PCT = _participationFloorPct;
+        CAMPAIGN_TIMEOUT_BLOCKS = _campaignTimeoutBlocks;
     }
 
     function domainSeparator() public view returns (bytes32) {
@@ -166,6 +188,7 @@ contract PilotEscrow is Ownable2Step, Pausable, ReentrancyGuard {
                 ? validScores[i] - medianScore
                 : medianScore - validScores[i];
             if (deviation > maxDeviation) {
+                emit DeviationReported(campaignUid, validSigners[i], validScores[i], medianScore, deviation);
                 registry.reportDeviation(validSigners[i], validScores[i], medianScore);
             }
         }
@@ -269,10 +292,20 @@ contract PilotEscrow is Ownable2Step, Pausable, ReentrancyGuard {
     function _medianOfCopy(uint256[] memory src, uint256 count) internal pure returns (uint256) {
         require(count > 0, "Empty array");
         require(count <= MAX_SCORES, "Too many scores for median");
-        for (uint256 i = 1; i < count; i++) {
-            require(src[i] >= src[i - 1], "Scores not sorted");
+        uint256[] memory sorted = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            sorted[i] = src[i];
         }
-        return src[count / 2];
+        for (uint256 i = 1; i < count; i++) {
+            uint256 key = sorted[i];
+            uint256 j = i;
+            while (j > 0 && sorted[j - 1] > key) {
+                sorted[j] = sorted[j - 1];
+                j--;
+            }
+            sorted[j] = key;
+        }
+        return sorted[count / 2];
     }
 
     /// @notice Schedule accumulated insurance pool withdrawal.

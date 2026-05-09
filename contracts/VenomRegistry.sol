@@ -43,9 +43,9 @@ contract VenomRegistry is Ownable2Step, ReentrancyGuard {
     address public pendingPilotEscrow;
     uint256 public pendingPilotEscrowScheduledAt;
 
-    uint256 public constant MIN_STAKE = 1 ether;
-    uint256 public constant SLASH_PERCENT = 5; // Reduced for rc.1
-    uint256 public constant MAX_DEVIATION = 25;
+    uint256 public immutable MIN_STAKE;
+    uint256 public immutable SLASH_PERCENT;
+    uint256 public immutable MAX_DEVIATION;
 
     /// @notice Emitted when an operator registers with stake and a Libp2p multiaddr.
     event OracleRegistered(address indexed operator, uint256 stake, string multiaddr);
@@ -70,7 +70,14 @@ contract VenomRegistry is Ownable2Step, ReentrancyGuard {
     /// @notice Emitted when a PilotEscrow upgrade is executed.
     event PilotEscrowUpgraded(address indexed newEscrow);
 
-    constructor() Ownable(msg.sender) {}
+    constructor(uint256 _minStake, uint256 _slashPercent, uint256 _maxDeviation) Ownable(msg.sender) {
+        require(_minStake >= 0.01 ether && _minStake <= 100 ether, "Invalid MIN_STAKE");
+        require(_slashPercent >= 1 && _slashPercent <= 50, "Invalid SLASH_PERCENT");
+        require(_maxDeviation >= 1 && _maxDeviation <= 100, "Invalid MAX_DEVIATION");
+        MIN_STAKE = _minStake;
+        SLASH_PERCENT = _slashPercent;
+        MAX_DEVIATION = _maxDeviation;
+    }
 
     modifier onlyPilotEscrow() {
         require(msg.sender == pilotEscrow, "Only PilotEscrow");

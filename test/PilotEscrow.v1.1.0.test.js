@@ -2,16 +2,18 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
 describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
+    const REGISTRY_ARGS = [ethers.parseEther("1.0"), 5, 25];
+    const ESCROW_ARGS = [5, 50, 67, 7200];
     let registry, escrow, owner, attacker, oracles;
 
     beforeEach(async function () {
         [owner, attacker, ...oracles] = await ethers.getSigners(); // Hardhat provides 20 signers by default
 
         const Registry = await ethers.getContractFactory("VenomRegistry");
-        registry = await Registry.deploy();
+        registry = await Registry.deploy(...REGISTRY_ARGS);
 
         const Escrow = await ethers.getContractFactory("PilotEscrow");
-        escrow = await Escrow.deploy(await registry.getAddress());
+        escrow = await Escrow.deploy(await registry.getAddress(), ...ESCROW_ARGS);
         await registry.setPilotEscrow(await escrow.getAddress());
 
         // Register 10 active oracles for clean percentage math
@@ -104,6 +106,49 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
         expect(campaign.closed).to.be.true;
     });
 
+    it("4b. Happy path accepts unsorted score arrival order and computes the median on-chain", async function () {
+        const uid = ethers.id("Q4B");
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
+
+        const scores = [90, 65, 81, 75, 70, 79];
+        const scoreSigs = await signEip712Score(oracles.slice(0, 6), uid, scores, escrow);
+        const reasons = [1];
+        const abstainSigs = await signEip712Abstain(oracles.slice(6, 7), uid, reasons, escrow);
+
+        await expect(escrow.closeCampaign(uid, scores, scoreSigs, reasons, abstainSigs))
+            .to.emit(escrow, "CampaignClosed")
+            .withArgs(uid, owner.address, ethers.parseEther("1.0"), 79);
+        expect((await escrow.campaigns(uid)).closed).to.be.true;
+    });
+
+    it("4c. closeCampaign reports and slashes score outliers beyond MAX_DEVIATION", async function () {
+        const uid = ethers.id("Q4C");
+        await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
+
+        const scores = [70, 40, 70, 70, 70, 70];
+        const scoreSigs = await signEip712Score(oracles.slice(0, 6), uid, scores, escrow);
+        const reasons = [1];
+        const abstainSigs = await signEip712Abstain(oracles.slice(6, 7), uid, reasons, escrow);
+        const stakeBefore = (await registry.oracles(oracles[1].address)).stake;
+
+        const closeTx = escrow.closeCampaign(uid, scores, scoreSigs, reasons, abstainSigs);
+
+        await expect(closeTx)
+            .to.emit(escrow, "DeviationReported")
+            .withArgs(uid, oracles[1].address, 40, 70, 30);
+        await expect(closeTx)
+            .to.emit(registry, "OracleSlashed");
+
+        const honestOracleAfter = await registry.oracles(oracles[0].address);
+        const oracleAfter = await registry.oracles(oracles[1].address);
+        const slashAmount = (stakeBefore * 5n) / 100n;
+        expect(honestOracleAfter.active).to.be.true;
+        expect(oracleAfter.stake).to.equal(stakeBefore - slashAmount);
+        expect(oracleAfter.active).to.be.false;
+        expect(await registry.slashedStakeReserve()).to.equal(slashAmount);
+        expect(await registry.everSlashed(oracles[1].address)).to.be.true;
+    });
+
     it("5. Score-and-abstain by same oracle: abstain is dropped, score counts", async function () {
         const uid = ethers.id("Q5");
         await escrow.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });
@@ -177,7 +222,7 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
 
     it("9. EIP-712 abstain replay across deployments fails", async function () {
         const Escrow = await ethers.getContractFactory("PilotEscrow");
-        const escrowB = await Escrow.deploy(await registry.getAddress());
+        const escrowB = await Escrow.deploy(await registry.getAddress(), ...ESCROW_ARGS);
 
         const uid = ethers.id("R1");
         await escrowB.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });

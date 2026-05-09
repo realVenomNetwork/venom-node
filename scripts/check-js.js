@@ -3,7 +3,15 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const ignoredDirs = new Set(["node_modules", "artifacts", "cache", "_archive", ".git"]);
+const ignoredDirs = new Set([
+  "node_modules",
+  "artifacts",
+  "cache",
+  "_archive",
+  ".git",
+  ".pytest_cache",
+  "__pycache__",
+]);
 
 function collectJsFiles(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

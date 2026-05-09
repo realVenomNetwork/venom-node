@@ -1,5 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
+const fs = require("node:fs");
+const path = require("node:path");
 const {
   leaderForRound,
   quorumMet,
@@ -127,5 +129,44 @@ describe("P2P leader election", function () {
       expect(isAlreadyClosedError({ info: { error: { message: "VM Exception: Campaign already closed" } } })).to.equal(true);
       expect(isAlreadyClosedError({ message: "Below participation floor" })).to.equal(false);
     });
+  });
+});
+
+describe("Regression: MAIN-FIX backports", function () {
+  const p2pSource = () => fs.readFileSync(path.resolve(__dirname, "../aggregator/p2p.js"), "utf8");
+
+  it("keeps gossipsub emitSelf enabled for self-observed solo signatures", function () {
+    // Regression: MAIN-FIX-1
+    expect(p2pSource()).to.match(/gossipsub\(\s*\{[^}]*emitSelf:\s*true/s);
+  });
+
+  it("keeps active-oracle refresh tolerant of unavailable iterable results", function () {
+    // Regression: MAIN-FIX-3
+    const text = p2pSource();
+    expect(text).to.include("function normalizeIterable(value)");
+    expect(text).to.include("if (!operators)");
+    expect(text).to.include("keeping previous active oracle cache");
+  });
+
+  it("keeps fallback leader rounds rotating deterministically after timeout", function () {
+    // Regression: leader-rotation-timeout
+    const signers = [
+      `0x${"1".repeat(40)}`,
+      `0x${"2".repeat(40)}`,
+      `0x${"3".repeat(40)}`
+    ];
+    __resetForTesting();
+    __setActiveOracleAddressesForTesting(signers.map((signer) => signer.toLowerCase()));
+    __setActiveOracleCountForTesting(signers.length);
+    try {
+      const uid = ethers.id("leader-timeout-regression");
+      const sorted = signers.map((signer) => signer.toLowerCase()).sort();
+      const round0 = leaderForRound(uid, signers, 0);
+      const round1 = leaderForRound(uid, signers, 1);
+
+      expect(sorted.indexOf(round1)).to.equal((sorted.indexOf(round0) + 1) % sorted.length);
+    } finally {
+      __resetForTesting();
+    }
   });
 });

@@ -15,6 +15,12 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
+Readiness check after the semantic model is loaded:
+
+```bash
+curl http://127.0.0.1:8000/ready
+```
+
 Evaluation endpoint:
 
 ```bash

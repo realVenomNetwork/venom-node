@@ -21,6 +21,7 @@ diff-*-export/
 _archive/
 *.log
 .venom-artifacts/
+.venom-canary/
 .vscode/
 .idea/
 python-eggs/

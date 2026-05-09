@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "network": "base-sepolia",
+  "chainId": 84532,
+  "profile": {
+    "name": "canary-01-5",
+    "constants": {
+      "REQUIRED_ORACLES": 3,
+      "SCORE_QUORUM_PCT": 50,
+      "PARTICIPATION_FLOOR_PCT": 67,
+      "CAMPAIGN_TIMEOUT_BLOCKS": 3600,
+      "MIN_STAKE": "100000000000000000",
+      "SLASH_PERCENT": 5,
+      "MAX_DEVIATION": 25
+    }
+  },
+  "contracts": {
+    "VenomRegistry": {
+      "address": "0x1000000000000000000000000000000000000001"
+    },
+    "PilotEscrow": {
+      "address": "0x2000000000000000000000000000000000000002"
+    }
+  }
+}

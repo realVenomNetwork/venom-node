@@ -13,7 +13,8 @@ const PHASE = Object.freeze({
   PAYLOAD: 5,
   WORKER: 6,
   P2P: 7,
-  REPORT: 8
+  REPORT: 8,
+  CANARY: 9
 });
 
 const CODES = Object.freeze({
@@ -262,6 +263,54 @@ const CODES = Object.freeze({
     summary: 'Live preflight gate evaluation failed unexpectedly.',
     severity: SEVERITY.FAIL,
     phase: PHASE.P2P
+  },
+  CANARY_MANIFEST_INVALID: {
+    code: 'CANARY_MANIFEST_INVALID',
+    summary: 'Canary operator manifest is missing, unreadable, or malformed.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.CANARY
+  },
+  CANARY_DEPLOYMENT_MISMATCH: {
+    code: 'CANARY_DEPLOYMENT_MISMATCH',
+    summary: 'Canary manifest deployment addresses do not match the preflight target.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.CANARY
+  },
+  CANARY_PROFILE_MISMATCH: {
+    code: 'CANARY_PROFILE_MISMATCH',
+    summary: 'Live contract constants do not match the canary profile manifest.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.CANARY
+  },
+  CANARY_OPERATOR_BALANCE_LOW: {
+    code: 'CANARY_OPERATOR_BALANCE_LOW',
+    summary: 'One or more canary operator wallets are below the configured balance floor.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.CANARY
+  },
+  CANARY_OPERATOR_IS_DEPLOYER: {
+    code: 'CANARY_OPERATOR_IS_DEPLOYER',
+    summary: 'A generated canary operator address matches the deployer address.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.CANARY
+  },
+  CANARY_QUEUE_SUFFIX_INVALID: {
+    code: 'CANARY_QUEUE_SUFFIX_INVALID',
+    summary: 'Canary operator queue suffixes are missing, invalid, or duplicated.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.CANARY
+  },
+  CANARY_PRIVATE_MULTIADDR: {
+    code: 'CANARY_PRIVATE_MULTIADDR',
+    summary: 'A canary operator env enables private multiaddr registration outside local-only mode.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.CANARY
+  },
+  CANARY_OPERATOR_ENV_UNREADABLE: {
+    code: 'CANARY_OPERATOR_ENV_UNREADABLE',
+    summary: 'A canary operator env file could not be read.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.CANARY
   },
   REPORT_WRITE_FAILED: {
     code: 'REPORT_WRITE_FAILED',

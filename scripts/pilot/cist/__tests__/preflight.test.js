@@ -1,6 +1,8 @@
 'use strict';
 
 const { expect } = require('chai');
+const fs = require('node:fs');
+const path = require('node:path');
 const { ethers } = require('ethers');
 
 const { STATE } = require('../phases');
@@ -14,6 +16,8 @@ const {
   runP2pDialbackCheck,
   runLivePreflightGates,
   applyLivePreflightGates,
+  buildPreflightQueueName,
+  isBlockingPreflightPhase,
 } = require('../../preflight');
 
 function arrayBufferFromText(text) {
@@ -38,12 +42,16 @@ describe('pilot live preflight', function () {
       '--skip-p2p-dialback',
       '--ipfs-cid=bafkreitest',
       '--ipfs-sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      '--canary-envs=.venom-canary',
+      '--local-only',
     ]);
 
     expect(options).to.deep.include({
       network: 'base-sepolia',
       json: true,
       skipP2pDialback: true,
+      localOnly: true,
+      canaryEnvsDir: '.venom-canary',
       ipfsCid: 'bafkreitest',
       ipfsSha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     });
@@ -61,6 +69,48 @@ describe('pilot live preflight', function () {
 
   it('renders discoverable help for the package command', function () {
     expect(renderHelp()).to.include('npm run pilot:preflight -- --network=base-sepolia');
+    expect(renderHelp()).to.include('--canary-envs=<dir>');
+  });
+
+  it('keeps the registry oracle ABI aligned with the deployed tuple shape', function () {
+    // Regression: MAIN-FIX-2
+    const text = fs.readFileSync(path.resolve(__dirname, '../../preflight.js'), 'utf8');
+
+    expect(text).to.include(
+      'function oracles(address) view returns (address operator, uint256 stake, uint256 scoreCount, uint256 lastActive, bool active, string multiaddr)'
+    );
+  });
+
+  it('builds the live preflight queue name with the operator suffix', function () {
+    // Regression: MF-8
+    expect(buildPreflightQueueName({
+      QUEUE_NAME: 'venom-campaigns',
+      OPERATOR_QUEUE_SUFFIX: 'op2',
+    })).to.equal('venom-campaigns-op2');
+    expect(buildPreflightQueueName({
+      QUEUE_NAME: 'venom-campaigns',
+      OPERATOR_QUEUE_SUFFIX: '',
+    })).to.equal('venom-campaigns');
+    expect(() => buildPreflightQueueName({
+      QUEUE_NAME: 'venom-campaigns',
+      OPERATOR_QUEUE_SUFFIX: 'op:2',
+    })).to.throw('OPERATOR_QUEUE_SUFFIX');
+  });
+
+  it('does not treat the intentional canary Phase 7 SKIP as blocking Phase 9', function () {
+    // Regression: MF-5
+    expect(isBlockingPreflightPhase({
+      index: 7,
+      state: STATE.SKIP,
+    }, { canaryEnvsDir: '.venom-canary' })).to.equal(false);
+    expect(isBlockingPreflightPhase({
+      index: 7,
+      state: STATE.SKIP,
+    }, {})).to.equal(true);
+    expect(isBlockingPreflightPhase({
+      index: 9,
+      state: STATE.SKIP,
+    }, { canaryEnvsDir: '.venom-canary' })).to.equal(true);
   });
 
   it('derives the ML health URL from the evaluate URL', function () {

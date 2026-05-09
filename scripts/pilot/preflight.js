@@ -18,6 +18,7 @@ const { buildRunContext, makeConfigError } = require('./cist/config');
 const { STATE } = require('./cist/phases');
 const { writeReports } = require('./cist/report');
 const { updateLatestPointer } = require('./cist/latest');
+const { runCanaryReadiness } = require('./cist/phases/canary-readiness');
 
 const SUPPORTED_NETWORKS = Object.freeze({
   'base-sepolia': {
@@ -29,11 +30,16 @@ const SUPPORTED_NETWORKS = Object.freeze({
 const REGISTRY_ABI = Object.freeze([
   'function activeOracleCount() view returns (uint256)',
   'function MIN_STAKE() view returns (uint256)',
+  'function SLASH_PERCENT() view returns (uint256)',
+  'function MAX_DEVIATION() view returns (uint256)',
   'function oracles(address) view returns (address operator, uint256 stake, uint256 scoreCount, uint256 lastActive, bool active, string multiaddr)',
 ]);
 
 const ESCROW_ABI = Object.freeze([
   'function REQUIRED_ORACLES() view returns (uint256)',
+  'function SCORE_QUORUM_PCT() view returns (uint256)',
+  'function PARTICIPATION_FLOOR_PCT() view returns (uint256)',
+  'function CAMPAIGN_TIMEOUT_BLOCKS() view returns (uint256)',
 ]);
 
 const PREFLIGHT_DID_NOT_VERIFY = Object.freeze([
@@ -54,6 +60,8 @@ function parsePreflightArgs(argv = []) {
     ipfsSha256: null,
     skipP2pDialback: false,
     requireP2pDialback: false,
+    canaryEnvsDir: null,
+    localOnly: false,
   };
 
   for (const arg of argv) {
@@ -63,6 +71,9 @@ function parsePreflightArgs(argv = []) {
       options.help = true;
     } else if (arg === '--skip-p2p-dialback') {
       options.skipP2pDialback = true;
+    } else if (arg === '--local-only') {
+      options.localOnly = true;
+      options.skipP2pDialback = true;
     } else if (arg === '--require-p2p-dialback') {
       options.requireP2pDialback = true;
     } else if (arg.startsWith('--network=')) {
@@ -71,6 +82,8 @@ function parsePreflightArgs(argv = []) {
       options.ipfsCid = arg.slice('--ipfs-cid='.length);
     } else if (arg.startsWith('--ipfs-sha256=')) {
       options.ipfsSha256 = arg.slice('--ipfs-sha256='.length);
+    } else if (arg.startsWith('--canary-envs=')) {
+      options.canaryEnvsDir = arg.slice('--canary-envs='.length);
     } else {
       throw makeConfigError(
         'PREFLIGHT_UNSUPPORTED_ARGUMENT',
@@ -114,6 +127,8 @@ function renderHelp() {
     '  --ipfs-sha256=<sha256>       Override PREFLIGHT_IPFS_SHA256.',
     '  --skip-p2p-dialback          Do not attempt optional external dial-back probe.',
     '  --require-p2p-dialback       Fail if no dial-back probe is configured or reachable.',
+    '  --canary-envs=<dir>          Validate generated canary operator manifest and env files.',
+    '  --local-only                 Skip P2P dial-back and allow private multiaddrs in canary envs.',
     '',
   ].join('\n');
 }
@@ -562,6 +577,19 @@ function buildRedisConnection(env) {
   return redis;
 }
 
+function buildPreflightQueueName(env = process.env) {
+  const baseName = env.QUEUE_NAME || 'venom-campaigns';
+  const suffix = String(env.OPERATOR_QUEUE_SUFFIX || '').trim();
+  if (!suffix) return baseName;
+  if (!/^[a-zA-Z0-9._-]{1,64}$/.test(suffix)) {
+    throw makeConfigError(
+      'PREFLIGHT_QUEUE_SUFFIX_INVALID',
+      'OPERATOR_QUEUE_SUFFIX must be 1-64 characters using only letters, numbers, dot, underscore, or dash'
+    );
+  }
+  return `${baseName}-${suffix}`;
+}
+
 function buildLiveClientOptions(context, parsed, env = process.env) {
   const rpcUrls = buildRpcUrls(env);
   if (!rpcUrls.length) {
@@ -575,7 +603,7 @@ function buildLiveClientOptions(context, parsed, env = process.env) {
   const registry = new ethers.Contract(registryAddress, REGISTRY_ABI, provider);
   const escrow = new ethers.Contract(escrowAddress, ESCROW_ABI, provider);
   const redisClient = buildRedisConnection(env);
-  const queue = new Queue(env.QUEUE_NAME || 'venom-campaigns', { connection: redisClient });
+  const queue = new Queue(buildPreflightQueueName(env), { connection: redisClient });
   const mlClient = createMlHttpClient(env);
 
   return {
@@ -637,6 +665,12 @@ function printPreflightOutput({ context, report, paths }) {
   console.log(`Report: ${markdownPath}`);
 }
 
+function isBlockingPreflightPhase(phase, parsed = {}) {
+  if (phase.state === STATE.FAIL) return true;
+  if (phase.state !== STATE.SKIP) return false;
+  return !(parsed.canaryEnvsDir && phase.index === 7);
+}
+
 async function main(argv = process.argv.slice(2), env = process.env) {
   let parsed;
   let context;
@@ -660,7 +694,11 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       network: parsed.network,
       chainId: SUPPORTED_NETWORKS[parsed.network].chainId,
       readOnly: true,
+      canaryEnvsDir: parsed.canaryEnvsDir,
+      localOnly: parsed.localOnly,
     };
+    context.canaryEnvsDir = parsed.canaryEnvsDir;
+    context.localOnly = parsed.localOnly;
     context.safety = {
       touchesLiveState: true,
       maySpendTestnetEth: false,
@@ -674,7 +712,26 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       env,
     });
 
-    const hasBlockingPhase = phases.some((phase) => phase.state === STATE.FAIL || phase.state === STATE.SKIP);
+    let hasBlockingPhase = phases.some((phase) => isBlockingPreflightPhase(phase, parsed));
+    if (!hasBlockingPhase && parsed.canaryEnvsDir) {
+      const canaryPhase = await runCanaryReadiness(context, {
+        canaryEnvsDir: parsed.canaryEnvsDir,
+        localOnly: parsed.localOnly,
+        env,
+        provider: resources.provider,
+        registry: resources.registry,
+        escrow: resources.escrow,
+        registryAddress: env.VENOM_REGISTRY_ADDRESS,
+        escrowAddress: env.PILOT_ESCROW_ADDRESS,
+      });
+      const reportIndex = phases.findIndex((phase) => phase.key === 'report');
+      if (reportIndex >= 0) {
+        phases.splice(reportIndex, 0, canaryPhase);
+      } else {
+        phases.push(canaryPhase);
+      }
+      hasBlockingPhase = phases.some((phase) => isBlockingPreflightPhase(phase, parsed));
+    }
     if (!hasBlockingPhase) {
       const gateResult = await runLivePreflightGates(resources, { env, parsed });
       applyLivePreflightGates(phases, gateResult);
@@ -738,6 +795,8 @@ module.exports = {
   runP2pDialbackCheck,
   runLivePreflightGates,
   applyLivePreflightGates,
+  buildPreflightQueueName,
+  isBlockingPreflightPhase,
   buildLiveClientOptions,
   main,
 };

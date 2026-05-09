@@ -161,6 +161,15 @@ describe('CIST Phase 7: P2P / signature aggregation', function () {
     expect(validatePhaseResult(result)).to.equal(true);
   });
 
+  it('SKIPs legacy single-operator checks when canary envs are active', async function () {
+    const result = await runP2pAggregation(makeContext({ canaryEnvsDir: '/tmp/canary' }), {});
+
+    expect(result.state).to.equal(STATE.SKIP);
+    expect(result.codes).to.deep.equal([]);
+    expect(result.notes[0]).to.include('deferring legacy single-operator P2P checks to Phase 9');
+    expect(validatePhaseResult(result)).to.equal(true);
+  });
+
   it('FAILs with P2P_ORACLE_FACTORY_INVALID when the oracle factory is malformed', async function () {
     const result = await runP2pAggregation(makeContext(), {
       chainId: HARDHAT_CHAIN_ID,

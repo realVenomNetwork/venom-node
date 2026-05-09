@@ -31,6 +31,7 @@ const FIXTURE_ESCROW_BYTECODE =
 const FIXTURE_REGISTRY_BYTECODE =
   `0x608060405234801561001057600080fd5b5063${SELECTORS.UNSTAKE.slice(2)}600052`;
 const FIXTURE_ORACLE_COUNT = 3;
+const CORE_PHASES = PHASES.filter((phase) => phase.key !== 'canary');
 
 function makeSkeletonPhaseResult(phase) {
   return createPhaseResult(phase.index, STATE.SKIP, {
@@ -49,8 +50,8 @@ function makeSkippedPhaseResult(phase, triggerPhase) {
   });
 }
 
-function cascadeRest(results, triggerPhase, sliceFrom, sliceTo = PHASES.length - 1) {
-  for (const phase of PHASES.slice(sliceFrom, sliceTo)) {
+function cascadeRest(results, triggerPhase, sliceFrom, sliceTo = CORE_PHASES.length - 1) {
+  for (const phase of CORE_PHASES.slice(sliceFrom, sliceTo)) {
     results.push(makeSkippedPhaseResult(phase, triggerPhase));
   }
 }
@@ -234,7 +235,7 @@ async function runCistPhases(context, options = {}) {
   }
 
   if (effectiveState(phase6, strict) !== STATE.PASS) {
-    for (const phase of PHASES.slice(results.length, PHASES.length - 1)) {
+    for (const phase of CORE_PHASES.slice(results.length, CORE_PHASES.length - 1)) {
       results.push(makeSkeletonPhaseResult(phase));
     }
 

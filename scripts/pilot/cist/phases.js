@@ -15,6 +15,7 @@ const PHASES = Object.freeze([
   { index: 5, key: 'payload', name: 'Payload resolution' },
   { index: 6, key: 'worker', name: 'Worker decision' },
   { index: 7, key: 'p2p', name: 'P2P / signature aggregation' },
+  { index: 9, key: 'canary', name: 'Canary multi-operator readiness' },
   { index: 8, key: 'report', name: 'Report and teardown integrity' }
 ]);
 

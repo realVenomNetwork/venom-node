@@ -1,5 +1,5 @@
 // aggregator/producer.js
-const { getCampaignQueue, getConnection } = require('./queue');
+const { getCampaignQueue, getConnection, operatorScopedKey, QUEUE_NAME, OPERATOR_QUEUE_SUFFIX } = require('./queue');
 const { ethers } = require('ethers');
 const MultiRpcProvider = require('../rpc/router');
 const path = require('path');
@@ -44,7 +44,7 @@ function getProducerRuntime() {
 
 function getCursorKey() {
   const address = process.env.PILOT_ESCROW_ADDRESS || "unknown";
-  return `venom:producer:lastScannedBlock:${address.toLowerCase()}`;
+  return operatorScopedKey("producer", "lastScannedBlock", address.toLowerCase());
 }
 
 async function loadLastScannedBlock() {
@@ -122,7 +122,7 @@ async function discoverAndQueueNewCampaigns() {
       const uid = event.args.campaignUid;
       const contentUri = event.args.contentUri;
       const contentHash = event.args.contentHash;
-      const campaignKey = `venom:campaign:queued:${uid.toLowerCase()}`;
+      const campaignKey = operatorScopedKey("campaign", "queued", uid.toLowerCase());
 
       const exists = await getConnection().exists(campaignKey);
       if (exists) {
@@ -162,7 +162,8 @@ async function discoverAndQueueNewCampaigns() {
 
 async function startProducer() {
   console.log("Starting VENOM Producer (BullMQ + MultiRPC)");
-  console.log(`   Contract: ${process.env.PILOT_ESCROW_ADDRESS}\n`);
+  console.log(`   Contract: ${process.env.PILOT_ESCROW_ADDRESS}`);
+  console.log(`   Queue: ${QUEUE_NAME}${OPERATOR_QUEUE_SUFFIX ? ` (operator suffix: ${OPERATOR_QUEUE_SUFFIX})` : ""}\n`);
 
   await discoverAndQueueNewCampaigns();
   producerInterval = setInterval(discoverAndQueueNewCampaigns, 30000);

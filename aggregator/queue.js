@@ -12,7 +12,32 @@ const REDIS_USERNAME = process.env.REDIS_USERNAME || 'venom_node';
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
 const REDIS_TLS = process.env.REDIS_TLS === 'true';
 
-const QUEUE_NAME = process.env.QUEUE_NAME || 'venom-campaigns';
+const BASE_QUEUE_NAME = process.env.QUEUE_NAME || 'venom-campaigns';
+
+function normalizeQueueSuffix(input) {
+  const suffix = String(input || '').trim();
+  if (!suffix) return '';
+  if (!/^[a-zA-Z0-9._-]{1,64}$/.test(suffix)) {
+    throw new Error('OPERATOR_QUEUE_SUFFIX must be 1-64 characters using only letters, numbers, dot, underscore, or dash');
+  }
+  return suffix;
+}
+
+const OPERATOR_QUEUE_SUFFIX = normalizeQueueSuffix(process.env.OPERATOR_QUEUE_SUFFIX);
+
+function buildQueueName(baseName = BASE_QUEUE_NAME, suffix = OPERATOR_QUEUE_SUFFIX) {
+  const normalizedSuffix = normalizeQueueSuffix(suffix);
+  return normalizedSuffix ? `${baseName}-${normalizedSuffix}` : baseName;
+}
+
+function operatorScopedKey(...parts) {
+  const scopedParts = OPERATOR_QUEUE_SUFFIX
+    ? ['venom', OPERATOR_QUEUE_SUFFIX, ...parts]
+    : ['venom', ...parts];
+  return scopedParts.map((part) => String(part)).join(':');
+}
+
+const QUEUE_NAME = buildQueueName();
 
 let connection = null;
 let campaignQueue = null;
@@ -102,5 +127,10 @@ module.exports = {
   closeQueueResources,
   reconnectRedis,
   redisEventEmitter,
+  BASE_QUEUE_NAME,
+  OPERATOR_QUEUE_SUFFIX,
+  normalizeQueueSuffix,
+  buildQueueName,
+  operatorScopedKey,
   QUEUE_NAME
 };

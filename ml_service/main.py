@@ -157,6 +157,23 @@ async def health_check(request: Request):
     }
 
 
+@app.get("/ready", dependencies=[Depends(optional_verify_api_key)])
+@limiter.limit("30/minute")
+async def readiness_check(request: Request):
+    api_key_configured = bool(os.getenv("ML_SERVICE_API_KEY"))
+    model_loaded = hasattr(app.state, "semantic_model")
+    if requires_api_key() and not api_key_configured:
+        raise HTTPException(status_code=503, detail="ML_SERVICE_API_KEY is required in testnet/mainnet mode")
+    if not model_loaded:
+        raise HTTPException(status_code=503, detail="Semantic model is not loaded")
+    return {
+        "status": "ready",
+        "model_loaded": model_loaded,
+        "model_name": SEMANTIC_MODEL_NAME,
+        "api_key_configured": api_key_configured
+    }
+
+
 @app.post("/evaluate", response_model=EvaluateResponse, dependencies=[Depends(verify_api_key)], tags=["evaluation"])
 @limiter.limit("10/minute")
 async def evaluate(request: Request, evaluate_request: EvaluateRequest):

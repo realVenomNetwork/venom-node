@@ -12,7 +12,7 @@ const {
 } = require('../phases');
 
 describe('CIST phases', function () {
-  it('locks down the 8-phase order', function () {
+  it('locks down the phase order', function () {
     expect(PHASES.map((phase) => phase.name)).to.deep.equal([
       'Config and redaction preflight',
       'Chain and contract binding',
@@ -21,6 +21,7 @@ describe('CIST phases', function () {
       'Payload resolution',
       'Worker decision',
       'P2P / signature aggregation',
+      'Canary multi-operator readiness',
       'Report and teardown integrity'
     ]);
   });
@@ -28,6 +29,7 @@ describe('CIST phases', function () {
   it('indexes phases by index and key', function () {
     expect(PHASE_BY_INDEX[1].key).to.equal('config');
     expect(PHASE_BY_KEY.report.index).to.equal(8);
+    expect(PHASE_BY_KEY.canary.index).to.equal(9);
   });
 
   it('validates known states', function () {

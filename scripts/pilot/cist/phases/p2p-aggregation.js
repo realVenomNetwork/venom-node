@@ -86,8 +86,20 @@ async function runP2pAggregation(context, options = {}) {
   const notes = [];
   const p2p = { configured: false };
   const signatures = [];
+  const canaryEnvsDir = context.canaryEnvsDir || options.canaryEnvsDir || null;
 
   try {
+    if (canaryEnvsDir) {
+      notes.push('Canary multi-operator mode active; deferring legacy single-operator P2P checks to Phase 9 (canary-readiness).');
+      return createPhaseResult(PHASE_INDEX, STATE.SKIP, {
+        durationMs: Math.max(0, Math.round(performance.now() - started)),
+        codes,
+        notes,
+        p2p,
+        signatures,
+      });
+    }
+
     if (options.chainId === undefined || options.chainId === null) {
       codes.push('P2P_CHAIN_ID_MISSING');
       notes.push('Chain ID is required for P2P aggregation');

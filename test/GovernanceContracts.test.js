@@ -394,7 +394,7 @@ describe("Governance contracts", function () {
   describe("VenomRegistry", function () {
     it("tracks slashed stake separately and allows owner treasury withdrawal", async function () {
       const Registry = await ethers.getContractFactory("VenomRegistry");
-      const registry = await Registry.deploy();
+      const registry = await Registry.deploy(ethers.parseEther("1.0"), 5, 25);
       await registry.setPilotEscrow(owner.address);
 
       const stake = ethers.parseEther("1");

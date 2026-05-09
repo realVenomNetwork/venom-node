@@ -9,6 +9,49 @@ const EXPECTED_CHAIN_IDS = Object.freeze({
   "base-sepolia": 84532,
 });
 
+const DEPLOY_PROFILES = Object.freeze({
+  production: {
+    requiredOracles: 5,
+    scoreQuorumPct: 50,
+    participationFloorPct: 67,
+    campaignTimeoutBlocks: 7200,
+    minStakeEth: "1.0",
+    slashPercent: 5,
+    maxDeviation: 25
+  },
+  "canary-01-5": {
+    requiredOracles: 3,
+    scoreQuorumPct: 50,
+    participationFloorPct: 67,
+    campaignTimeoutBlocks: 3600,
+    minStakeEth: "0.1",
+    slashPercent: 5,
+    maxDeviation: 25
+  },
+  solo: {
+    requiredOracles: 1,
+    scoreQuorumPct: 50,
+    participationFloorPct: 67,
+    campaignTimeoutBlocks: 1800,
+    minStakeEth: "0.05",
+    slashPercent: 5,
+    maxDeviation: 25
+  }
+});
+
+function resolveDeployProfile() {
+  const name = process.env.DEPLOY_PROFILE || process.env.CANARY_PROFILE || "production";
+  const profile = DEPLOY_PROFILES[name];
+  if (!profile) {
+    throw new Error(`Unknown deploy profile: ${name}. Valid profiles: ${Object.keys(DEPLOY_PROFILES).join(", ")}`);
+  }
+  return {
+    name,
+    ...profile,
+    minStake: hre.ethers.parseEther(profile.minStakeEth)
+  };
+}
+
 function resolveGitCommit() {
   if (process.env.GIT_COMMIT) return process.env.GIT_COMMIT;
   try {
@@ -49,6 +92,8 @@ async function readWithRetry(description, readFn, isExpected, options = {}) {
 async function main() {
   const [deployer] = await hre.ethers.getSigners();
   console.log("Deploying Phase 4 contracts with account:", deployer.address);
+  const profile = resolveDeployProfile();
+  console.log("Deploy profile:", profile.name);
   const network = await hre.ethers.provider.getNetwork();
   const chainId = Number(network.chainId);
   const expectedChainId = EXPECTED_CHAIN_IDS[hre.network.name];
@@ -59,7 +104,17 @@ async function main() {
 
   // 1. Deploy VenomRegistry
   const VenomRegistry = await hre.ethers.getContractFactory("VenomRegistry");
-  const venomRegistry = await VenomRegistry.deploy();
+  const registryConstructorArguments = [
+    profile.minStake,
+    profile.slashPercent,
+    profile.maxDeviation,
+  ];
+  const registryArtifactArguments = [
+    profile.minStake.toString(),
+    profile.slashPercent,
+    profile.maxDeviation,
+  ];
+  const venomRegistry = await VenomRegistry.deploy(...registryConstructorArguments);
   await venomRegistry.waitForDeployment();
   const venomRegistryAddress = await venomRegistry.getAddress();
   const venomRegistryTx = venomRegistry.deploymentTransaction();
@@ -67,7 +122,14 @@ async function main() {
 
   // 2. Deploy PilotEscrow (passing registry address)
   const PilotEscrow = await hre.ethers.getContractFactory("PilotEscrow");
-  const pilotEscrow = await PilotEscrow.deploy(venomRegistryAddress);
+  const escrowConstructorArguments = [
+    venomRegistryAddress,
+    profile.requiredOracles,
+    profile.scoreQuorumPct,
+    profile.participationFloorPct,
+    profile.campaignTimeoutBlocks,
+  ];
+  const pilotEscrow = await PilotEscrow.deploy(...escrowConstructorArguments);
   await pilotEscrow.waitForDeployment();
   const pilotEscrowAddress = await pilotEscrow.getAddress();
   const pilotEscrowTx = pilotEscrow.deploymentTransaction();
@@ -75,7 +137,8 @@ async function main() {
 
   // 3. Set PilotEscrow in Registry
   const bindTx = await venomRegistry.setPilotEscrow(pilotEscrowAddress);
-  const bindReceipt = await bindTx.wait(3);
+  const bindConfirmations = hre.network.name === "hardhat" ? 1 : 3;
+  const bindReceipt = await bindTx.wait(bindConfirmations);
   console.log("PilotEscrow address set in VenomRegistry");
 
   const boundEscrow = await readWithRetry(
@@ -113,6 +176,18 @@ async function main() {
     gitCommit: resolveGitCommit(),
     deployedAt: new Date().toISOString(),
     deployer: deployer.address,
+    profile: {
+      name: profile.name,
+      constants: {
+        REQUIRED_ORACLES: profile.requiredOracles,
+        SCORE_QUORUM_PCT: profile.scoreQuorumPct,
+        PARTICIPATION_FLOOR_PCT: profile.participationFloorPct,
+        CAMPAIGN_TIMEOUT_BLOCKS: profile.campaignTimeoutBlocks,
+        MIN_STAKE: profile.minStake.toString(),
+        SLASH_PERCENT: profile.slashPercent,
+        MAX_DEVIATION: profile.maxDeviation,
+      },
+    },
     owners: {
       VenomRegistry: registryOwner,
       PilotEscrow: escrowOwner,
@@ -120,12 +195,12 @@ async function main() {
     contracts: {
       VenomRegistry: {
         address: venomRegistryAddress,
-        constructorArguments: [],
+        constructorArguments: registryArtifactArguments,
         deploymentTxHash: venomRegistryTx ? venomRegistryTx.hash : null,
       },
       PilotEscrow: {
         address: pilotEscrowAddress,
-        constructorArguments: [venomRegistryAddress],
+        constructorArguments: escrowConstructorArguments,
         deploymentTxHash: pilotEscrowTx ? pilotEscrowTx.hash : null,
       },
     },
@@ -143,8 +218,8 @@ async function main() {
   fs.writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
   console.log("Deployment artifact written to:", artifactPath);
 
-  await maybeVerify(venomRegistryAddress, []);
-  await maybeVerify(pilotEscrowAddress, [venomRegistryAddress]);
+  await maybeVerify(venomRegistryAddress, registryArtifactArguments);
+  await maybeVerify(pilotEscrowAddress, escrowConstructorArguments);
 
   console.log("\n=== Phase 4 Deployment Complete ===");
   console.log("VENOM_REGISTRY_ADDRESS=", venomRegistryAddress);

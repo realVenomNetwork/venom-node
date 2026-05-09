@@ -9,6 +9,7 @@ build/
 dist/
 artifacts/
 cache/
+deployments/
 __pycache__/
 *.pyc
 attack_runs/

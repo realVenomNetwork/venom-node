@@ -2,7 +2,7 @@
 // VENOM Node v1.1.0-rc.1 - IPFS fetch fallback, ML scoring, signed score/abstain gossip.
 
 const { Worker } = require('bullmq');
-const { getConnection, QUEUE_NAME } = require('./queue');
+const { getConnection, QUEUE_NAME, OPERATOR_QUEUE_SUFFIX } = require('./queue');
 const { ethers } = require('ethers');
 const path = require('path');
 const MultiRpcProvider = require('../rpc/router');
@@ -471,7 +471,8 @@ async function startWorker() {
   });
 
   console.log("Starting VENOM Worker v1.1.0 (BullMQ + signed abstention + IPFS concurrent fallback)");
-  console.log(`   Address: ${wallet.address} | Concurrency: ${WORKER_CONCURRENCY} | Gateways: ${IPFS_GATEWAYS.length} | ML: ${ML_SERVICE_URL}\n`);
+  console.log(`   Address: ${wallet.address} | Queue: ${QUEUE_NAME}${OPERATOR_QUEUE_SUFFIX ? ` | Queue suffix: ${OPERATOR_QUEUE_SUFFIX}` : ""}`);
+  console.log(`   Concurrency: ${WORKER_CONCURRENCY} | Gateways: ${IPFS_GATEWAYS.length} | ML: ${ML_SERVICE_URL}\n`);
 
   worker.on('failed', (job, err) => console.error(`Job ${job.id} failed:`, err.message));
   return worker;

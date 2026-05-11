@@ -28,6 +28,11 @@ Source reports reviewed: Multiple internal review reports across iterative revie
 - Replaced UID-modulo off-chain leader selection with signer-set-derived leader selection and timeout-based round rotation.
 - Mirrored the escrow score quorum, score percentage, and participation floor gates off-chain before attempting aggregate submission.
 - Hardened already-closed aggregate submission cleanup against common ethers error wrapping fields.
+- Added shared deployment profiles, including `canary-03`, and strict deployment artifact validation before operator env generation.
+- Added persistent per-operator libp2p keys, compose keystore volumes, and `yamux` stream muxing for pre-canary 3.
+- Added node `/healthz` dependency checks and structured canary event publishing for runtime diagnostics.
+- Made `MultiRpcProvider.getProvider()` fallback-aware for long-lived ethers contract and wallet reads.
+- Added worker pending-delivery outbox retry and explicit BullMQ job lock sizing.
 
 ## Next Iteration Candidates
 
@@ -41,9 +46,9 @@ Source reports reviewed: Multiple internal review reports across iterative revie
 | MF-4 | Closed in integration PR 3 | Treat generated canary operator envs, manifests, funding targets, and compose files as artifacts. Keep `.venom-canary/` ignored and regenerate per run. |
 | MF-5 | Closed in integration PR 4 | Skip the legacy single-operator Phase 7 P2P preflight when `--canary-envs` is active; Phase 9 owns multi-operator readiness. |
 | MF-6 | Closed in integration PR 2 | Keep BullMQ queue names using the hyphenated operator suffix form, while Redis keys continue using colon separators. BullMQ rejects colon-bearing queue names. |
-| MF-7 | Deferred to Canary 02 | Replace the Canary 01.5 bootstrap workaround with persistent per-operator libp2p keys, stable peer IDs, and a governed or operator-authenticated registry method to update oracle multiaddrs without redeploying the registry. |
+| MF-7 | Partially closed in pre-canary 3 | Persistent per-operator libp2p keys and stable peer IDs are in place. A governed or operator-authenticated registry method for updating oracle multiaddrs remains deferred. |
 | MF-8 | Closed in integration PR 4 | Ensure live preflight queue construction honors `OPERATOR_QUEUE_SUFFIX` so multi-operator preflight validates the queue names operators actually use. |
-| MF-9 | Deferred, P3 | Consolidate canary profile constants and the queue suffix validation regex into a shared module. PR 4 intentionally localized these values to stay independent, but future edits should avoid duplicating profile policy across scripts and tests. |
+| MF-9 | Closed in pre-canary 3 | Canary profile constants and the queue suffix validation regex now live in `scripts/pilot/profiles.js`. |
 
 ### Protocol And Contract Design
 
@@ -65,19 +70,15 @@ Source reports reviewed: Multiple internal review reports across iterative revie
 
 ### Runtime And Network
 
-- Replace `mplex` with `yamux` after adding the dependency and testing libp2p compatibility.
 - Periodically dial newly discovered oracle multiaddrs, not just refresh the accepted signer set.
 - Add P2P/RPC rate limits and spam controls.
 - Move env parsing into a single config module with validation and typed defaults.
 - Split deployment and node operation key paths fully: keep `DEPLOYER_PRIVATE_KEY` deploy-only and require `OPERATOR_PRIVATE_KEY` for runtime after a migration window.
 - Add encrypted keystore or hardware-wallet support before any production-style deployment.
-- Make contract reads created from `MultiRpcProvider.getProvider()` fallback-aware. Current fallback covers direct provider calls better than long-lived `ethers.Contract` instances.
-- Add BullMQ job timeout/backoff configuration that is explicitly larger than fetch plus ML timeout budgets.
 - Consider racing a bounded number of IPFS gateways concurrently with aborts for slower requests. Keep sequential fallback only if bandwidth conservation is more important than latency.
 - Add structured logging with a real logger and subsystem fields.
-- Add Prometheus metrics for worker jobs, producer scans, gossip messages, RPC fallback, ML failures, and close submissions.
-- Add a node application `/healthz` endpoint that checks queue connectivity and recent worker activity, then point Docker healthchecks at it.
-- Build a real dashboard from metrics instead of random simulated data.
+- Add Prometheus metrics for worker jobs, producer scans, gossip messages, RPC fallback, ML failures, and close submissions. Canary event logs are a bridge, not a metrics backend.
+- Build a real dashboard from metrics instead of relying only on local Redis event snapshots.
 
 ### ML Service
 

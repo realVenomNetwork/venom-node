@@ -27,7 +27,11 @@ const DEFAULT_CANNOT_PROVE = Object.freeze([
 const DEFAULT_ECONOMIC_DISCLOSURE = Object.freeze({
   phase_3_gate: "Phase 3+ reputation work is gated on committed operator payment design.",
   operator_payment_status: "The active v1 escrow flow does not implement operator bounty payouts.",
-  escrow_payout_status: "PilotEscrow.closeCampaign() currently returns the campaign bounty to the recorded campaign recipient."
+  escrow_payout_status: "PilotEscrow.closeCampaign() currently returns the campaign bounty to the recorded campaign recipient.",
+  not_in_scope: Object.freeze([
+    "Governance modules are not wired into PilotEscrow.closeCampaign() in this canary.",
+    "Operator bounty payouts are not implemented; the bounty returns to the recorded campaign recipient."
+  ])
 });
 
 class PostcardPolicyError extends Error {
@@ -176,6 +180,9 @@ function renderMarkdown(postcard) {
   const median = postcard.judgment_capsule.median_score === null || postcard.judgment_capsule.median_score === undefined
     ? "not recorded"
     : postcard.judgment_capsule.median_score;
+  const outOfScope = Array.isArray(postcard.economic_disclosure.not_in_scope) && postcard.economic_disclosure.not_in_scope.length > 0
+    ? `## Out of Scope\n\n${renderList(postcard.economic_disclosure.not_in_scope)}\n\n`
+    : "";
 
   return `${demoHeader}# Campaign Postcard v1
 
@@ -219,7 +226,7 @@ ${postcard.judgment_capsule.summary}
 - ${postcard.economic_disclosure.operator_payment_status}
 - ${postcard.economic_disclosure.escrow_payout_status}
 
-## Ephemerality
+${outOfScope}## Ephemerality
 
 This postcard is a local, immutable field note. It is not a credential, ranking, governance approval, or portable reputation claim.
 `;

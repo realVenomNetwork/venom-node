@@ -3,48 +3,19 @@ const hre = require("hardhat");
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const { PROFILES, getProfile } = require("./pilot/profiles");
+const { buildDeploymentArtifact } = require("./pilot/build-artifact");
 
 const EXPECTED_CHAIN_IDS = Object.freeze({
   hardhat: 31337,
   "base-sepolia": 84532,
 });
 
-const DEPLOY_PROFILES = Object.freeze({
-  production: {
-    requiredOracles: 5,
-    scoreQuorumPct: 50,
-    participationFloorPct: 67,
-    campaignTimeoutBlocks: 7200,
-    minStakeEth: "1.0",
-    slashPercent: 5,
-    maxDeviation: 25
-  },
-  "canary-01-5": {
-    requiredOracles: 3,
-    scoreQuorumPct: 50,
-    participationFloorPct: 67,
-    campaignTimeoutBlocks: 3600,
-    minStakeEth: "0.1",
-    slashPercent: 5,
-    maxDeviation: 25
-  },
-  solo: {
-    requiredOracles: 1,
-    scoreQuorumPct: 50,
-    participationFloorPct: 67,
-    campaignTimeoutBlocks: 1800,
-    minStakeEth: "0.05",
-    slashPercent: 5,
-    maxDeviation: 25
-  }
-});
+const DEPLOY_PROFILES = PROFILES;
 
 function resolveDeployProfile() {
   const name = process.env.DEPLOY_PROFILE || process.env.CANARY_PROFILE || "production";
-  const profile = DEPLOY_PROFILES[name];
-  if (!profile) {
-    throw new Error(`Unknown deploy profile: ${name}. Valid profiles: ${Object.keys(DEPLOY_PROFILES).join(", ")}`);
-  }
+  const profile = getProfile(name);
   return {
     name,
     ...profile,
@@ -169,49 +140,26 @@ async function main() {
   if (!registryCode || registryCode === "0x") throw new Error("VenomRegistry bytecode missing after deploy");
   if (!escrowCode || escrowCode === "0x") throw new Error("PilotEscrow bytecode missing after deploy");
 
-  const artifact = {
-    schemaVersion: 1,
-    network: hre.network.name,
+  const artifact = buildDeploymentArtifact({
+    networkName: hre.network.name,
     chainId,
     gitCommit: resolveGitCommit(),
-    deployedAt: new Date().toISOString(),
-    deployer: deployer.address,
-    profile: {
-      name: profile.name,
-      constants: {
-        REQUIRED_ORACLES: profile.requiredOracles,
-        SCORE_QUORUM_PCT: profile.scoreQuorumPct,
-        PARTICIPATION_FLOOR_PCT: profile.participationFloorPct,
-        CAMPAIGN_TIMEOUT_BLOCKS: profile.campaignTimeoutBlocks,
-        MIN_STAKE: profile.minStake.toString(),
-        SLASH_PERCENT: profile.slashPercent,
-        MAX_DEVIATION: profile.maxDeviation,
-      },
-    },
-    owners: {
-      VenomRegistry: registryOwner,
-      PilotEscrow: escrowOwner,
-    },
-    contracts: {
-      VenomRegistry: {
-        address: venomRegistryAddress,
-        constructorArguments: registryArtifactArguments,
-        deploymentTxHash: venomRegistryTx ? venomRegistryTx.hash : null,
-      },
-      PilotEscrow: {
-        address: pilotEscrowAddress,
-        constructorArguments: escrowConstructorArguments,
-        deploymentTxHash: pilotEscrowTx ? pilotEscrowTx.hash : null,
-      },
-    },
-    binding: {
-      txHash: bindReceipt ? (bindReceipt.hash || bindReceipt.transactionHash) : bindTx.hash,
-      blockNumber: bindReceipt ? Number(bindReceipt.blockNumber) : null,
-      registryPilotEscrow: boundEscrow,
-      pendingPilotEscrow: pendingEscrow,
-      escrowRegistry,
-    },
-  };
+    deployerAddress: deployer.address,
+    profile,
+    registryOwner,
+    escrowOwner,
+    venomRegistryAddress,
+    registryArtifactArguments,
+    venomRegistryTxHash: venomRegistryTx ? venomRegistryTx.hash : null,
+    pilotEscrowAddress,
+    escrowConstructorArguments,
+    pilotEscrowTxHash: pilotEscrowTx ? pilotEscrowTx.hash : null,
+    bindTxHash: bindReceipt ? (bindReceipt.hash || bindReceipt.transactionHash) : bindTx.hash,
+    bindBlockNumber: bindReceipt ? Number(bindReceipt.blockNumber) : null,
+    boundEscrow,
+    pendingEscrow,
+    escrowRegistry,
+  });
   const deploymentsDir = path.join(__dirname, "..", "deployments");
   fs.mkdirSync(deploymentsDir, { recursive: true });
   const artifactPath = path.join(deploymentsDir, `${hre.network.name}.json`);

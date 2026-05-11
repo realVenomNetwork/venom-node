@@ -273,6 +273,16 @@ describe("Runtime Mode Config", function () {
         expect(result.ok).to.be.true;
     });
 
+    it("rejects testnet + CANARY_FORCE_PASS=true", function () {
+        const result = validateRuntimeModeConfig({
+            [RUNTIME_MODE_ENV]: "testnet",
+            [TEST_PAYLOAD_ENV]: "false",
+            CANARY_FORCE_PASS: "true"
+        });
+        expect(result.ok).to.be.false;
+        expect(result.errors.some(e => e.includes("testnet") && e.includes("CANARY_FORCE_PASS"))).to.be.true;
+    });
+
     it("accepts mainnet + USE_TEST_PAYLOAD=false", function () {
         const result = validateRuntimeModeConfig({
             [RUNTIME_MODE_ENV]: "mainnet",

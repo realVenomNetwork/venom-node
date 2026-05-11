@@ -6,23 +6,14 @@ const { performance } = require('node:perf_hooks');
 const { ethers } = require('ethers');
 
 const { STATE, createPhaseResult } = require('../phases');
+const {
+  PROFILE_CONSTANTS,
+  QUEUE_SUFFIX_PATTERN,
+} = require('../../profiles');
 
 const PHASE_INDEX = 9;
 const DEFAULT_CANARY_BALANCE_FLOOR_ETH = '0.16';
 const PRIVATE_KEY_PATTERN = /0x[0-9a-fA-F]{64}/;
-const QUEUE_SUFFIX_PATTERN = /^[a-zA-Z0-9._-]{1,64}$/;
-
-const PROFILE_CONSTANTS = Object.freeze({
-  'canary-01-5': Object.freeze({
-    REQUIRED_ORACLES: 3,
-    SCORE_QUORUM_PCT: 50,
-    PARTICIPATION_FLOOR_PCT: 67,
-    CAMPAIGN_TIMEOUT_BLOCKS: 3600,
-    MIN_STAKE: '100000000000000000',
-    SLASH_PERCENT: 5,
-    MAX_DEVIATION: 25,
-  }),
-});
 
 const ESCROW_CONSTANTS = Object.freeze([
   'REQUIRED_ORACLES',
@@ -117,6 +108,7 @@ function parseOperatorEnvFlags(envPath, fsImpl = fs) {
   const flags = {
     privateMultiaddr: false,
     queueSuffix: null,
+    p2pKeystorePath: null,
   };
 
   for (const rawLine of text.split(/\r?\n/)) {
@@ -129,6 +121,8 @@ function parseOperatorEnvFlags(envPath, fsImpl = fs) {
       flags.privateMultiaddr = line.slice(eq + 1).trim().toLowerCase() === 'true';
     } else if (key === 'OPERATOR_QUEUE_SUFFIX') {
       flags.queueSuffix = line.slice(eq + 1).trim();
+    } else if (key === 'P2P_KEYSTORE_PATH') {
+      flags.p2pKeystorePath = line.slice(eq + 1).trim();
     }
   }
 
@@ -315,6 +309,10 @@ async function runCanaryReadiness(context, options = {}) {
       if (!localOnly && flags.privateMultiaddr) {
         addCode(codes, 'CANARY_PRIVATE_MULTIADDR');
         notes.push(`${operator.id} enables VENOM_ALLOW_PRIVATE_MULTIADDR outside --local-only.`);
+      }
+      if (!flags.p2pKeystorePath) {
+        addCode(codes, 'CANARY_P2P_KEYSTORE_MISSING');
+        notes.push(`${operator.id} is missing P2P_KEYSTORE_PATH for persistent peer identity.`);
       }
     } catch (error) {
       addCode(codes, error.code === 'CANARY_OPERATOR_ENV_UNREADABLE' ? error.code : 'CANARY_OPERATOR_ENV_UNREADABLE');

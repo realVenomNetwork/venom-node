@@ -306,6 +306,12 @@ const CODES = Object.freeze({
     severity: SEVERITY.FAIL,
     phase: PHASE.CANARY
   },
+  CANARY_P2P_KEYSTORE_MISSING: {
+    code: 'CANARY_P2P_KEYSTORE_MISSING',
+    summary: 'A canary operator env is missing persistent P2P keystore configuration.',
+    severity: SEVERITY.FAIL,
+    phase: PHASE.CANARY
+  },
   CANARY_OPERATOR_ENV_UNREADABLE: {
     code: 'CANARY_OPERATOR_ENV_UNREADABLE',
     summary: 'A canary operator env file could not be read.',

@@ -23,13 +23,13 @@ Key economic parameters:
 
 **ML service** — `ml_service/main.py` is a FastAPI microservice wrapping the scoring engine. It loads `all-MiniLM-L6-v2` into memory at startup and exposes `/evaluate` for payload scoring. The API key auth and rate limiting are wired through `slowapi`.
 
-**Dashboard** — `dashboard/index.html` is a static local dashboard. It reads from the node's health endpoint and Redis.
+**Dashboard** — `dashboard/index.html` is a static local dashboard. It reads node-published Redis events; node health endpoints are exposed separately for operator monitoring.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 22+
 - Python 3.11+
 - Docker and Docker Compose
 - Hardhat (installed via `npm ci`)
@@ -74,10 +74,13 @@ For a read-only Base Sepolia preflight against real RPC, Redis, ML, IPFS gateway
 npm run pilot:preflight -- --network=base-sepolia
 ```
 
+For the current public pre-canary runbook, see [docs/CANARY_03.md](docs/CANARY_03.md).
+
 ## Known Limitations and Open Work
 
 - **Real-payload IPFS fetching** is wired but has not been piloted on live testnet.
 - **Slashing surface** is implemented but not yet exercised against adversarial end-to-end scenarios.
+- **Canary 03 status** is prepared but not complete until the live deployment, generated operator artifacts, and smoke-test reports are recorded.
 - **Governance integration** — `ConsentManager` and `TitheManager` are not yet wired into `PilotEscrow.closeCampaign()`. They are deployable and tested but not active in the payment path.
 - **No external security audit.** The contracts have internal review coverage but no third-party audit.
 

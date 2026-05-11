@@ -3,6 +3,7 @@
 
 const { ethers } = require('ethers');
 const net = require('node:net');
+const { loadOrCreatePeerPrivateKey } = require('./peer-keystore');
 const { generatePostcardFromCloseReceipt } = require('../src/postcard');
 const { recordDashboardEvent } = require('../src/dashboard/quorum-replay');
 
@@ -37,6 +38,14 @@ const locallyClosedCampaigns = new Set();
 const peerRateLimits = new Map();
 let warnedMissingConnectionApi = false;
 let warnedMissingOracleList = false;
+
+function safeValue(fn, fallback) {
+  try {
+    return fn();
+  } catch {
+    return fallback;
+  }
+}
 
 const SCORE_TYPES = {
   Score: [
@@ -173,7 +182,13 @@ async function startP2PNode(wallet) {
 
   const { createLibp2p, gossipsub, tcp, noise, yamux, multiaddr, identify, mdns } = await loadLibp2pModules();
 
-  const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+  const MultiRpcProvider = require('../rpc/router');
+  const rpcUrls = (process.env.RPC_URLS || process.env.RPC_URL || "https://base-sepolia-rpc.publicnode.com")
+    .split(",")
+    .map(u => u.trim())
+    .filter(Boolean);
+  const multiProvider = new MultiRpcProvider(rpcUrls);
+  const provider = multiProvider.getProvider();
   const network = await provider.getNetwork();
   eip712Domain = {
     name: "VENOM PilotEscrow",
@@ -200,7 +215,8 @@ async function startP2PNode(wallet) {
     throw new Error(`Invalid P2P_LISTEN_PORT: ${process.env.P2P_LISTEN_PORT}`);
   }
 
-  libp2p = await createLibp2p({
+  const persistentPrivateKey = await loadOrCreatePeerPrivateKey(process.env.P2P_KEYSTORE_PATH);
+  const libp2pConfig = {
     addresses: { listen: [`/ip4/0.0.0.0/tcp/${listenPort}`] },
     transports: [tcp()],
     connectionEncrypters: [noise()],
@@ -213,7 +229,11 @@ async function startP2PNode(wallet) {
         emitSelf: true
       })
     }
-  });
+  };
+  if (persistentPrivateKey) {
+    libp2pConfig.privateKey = persistentPrivateKey;
+  }
+  libp2p = await createLibp2p(libp2pConfig);
 
   myPeerId = libp2p.peerId.toString();
   console.log(`VENOM P2P node started: ${myPeerId}`);
@@ -275,6 +295,8 @@ async function startP2PNode(wallet) {
       pendingCampaignGcInterval = null;
     }
     await originalStop();
+    libp2p = null;
+    myPeerId = null;
   };
 
   console.log("[P2P] Node ready (v1.1 signed abstention + closeCampaign ABI)");
@@ -758,11 +780,28 @@ async function checkAndSubmitIfLeader() {
   }
 }
 
+function getNodeStatus() {
+  const peerId = myPeerId || safeValue(() => libp2p.peerId.toString(), null);
+  const peerCount = typeof libp2p?.getPeers === 'function'
+    ? safeValue(() => libp2p.getPeers().length, 0)
+    : 0;
+  return Object.freeze({
+    started: Boolean(libp2p && peerId),
+    peerId,
+    peerCount,
+    activeOracleCount,
+    requiredOracles: REQUIRED_ORACLES,
+    quorumConstantsLoaded,
+    pendingCampaignCount: pendingCampaigns.size,
+  });
+}
+
 module.exports = {
   startP2PNode,
   publishSignature,
   publishAbstain,
   refreshActiveOracles,
+  getNodeStatus,
   prunePendingCampaigns,
   leaderForRound,
   quorumMet,
@@ -774,6 +813,9 @@ module.exports = {
     activeOracleAddresses = new Set(addresses);
   },
   __resetForTesting() {
+    libp2p = null;
+    myPeerId = null;
+    pendingCampaigns = new Map();
     activeOracleCount = REQUIRED_ORACLES;
     activeOracleAddresses = new Set();
     quorumConstantsLoaded = false;

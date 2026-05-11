@@ -5,6 +5,8 @@ const PRODUCTION_REGISTRY_ARGS = [ethers.parseEther("1.0"), 5, 25];
 const PRODUCTION_ESCROW_ARGS = [5, 50, 67, 7200];
 const CANARY_REGISTRY_ARGS = [ethers.parseEther("0.1"), 5, 25];
 const CANARY_ESCROW_ARGS = [3, 50, 67, 3600];
+const CANARY_03_REGISTRY_ARGS = [ethers.parseEther("0.25"), 5, 25];
+const CANARY_03_ESCROW_ARGS = [4, 50, 67, 3600];
 
 async function deployRegistry(args = PRODUCTION_REGISTRY_ARGS) {
   const Registry = await ethers.getContractFactory("VenomRegistry");
@@ -118,5 +120,145 @@ describe("Configurable deployment constants", function () {
     await expect(escrow.closeCampaign(uid, scores, scoreSigs, reasons, abstainSigs))
       .to.emit(escrow, "CampaignClosed")
       .withArgs(uid, owner.address, bounty, 82);
+  });
+
+  describe("Canary 03 profile constants", function () {
+    let owner, registry, escrow, oracles;
+
+    beforeEach(async function () {
+      [owner, ...oracles] = await ethers.getSigners();
+      registry = await deployRegistry(CANARY_03_REGISTRY_ARGS);
+      escrow = await deployEscrow(registry, CANARY_03_ESCROW_ARGS);
+      await registry.setPilotEscrow(await escrow.getAddress());
+
+      for (let i = 0; i < 5; i++) {
+        await registry.connect(oracles[i]).registerOracle(`/ip4/127.0.0.1/tcp/60${i}`, {
+          value: ethers.parseEther("0.25")
+        });
+      }
+    });
+
+    it("closes with 4 score signers and 1 abstain in a 5-oracle set", async function () {
+      const uid = ethers.id("canary-03-four-score-one-abstain");
+      const bounty = ethers.parseEther("0.01");
+      await escrow.connect(owner).fundCampaign(uid, "ipfs://canary-03", ethers.ZeroHash, { value: bounty });
+
+      const scores = [78, 80, 82, 84];
+      const scoreSigs = await signEip712Score(oracles.slice(0, 4), uid, scores, escrow);
+      const reasons = [6];
+      const abstainSigs = await signEip712Abstain(oracles.slice(4, 5), uid, reasons, escrow);
+
+      await expect(escrow.closeCampaign(uid, scores, scoreSigs, reasons, abstainSigs))
+        .to.emit(escrow, "CampaignClosed")
+        .withArgs(uid, owner.address, bounty, 82);
+    });
+
+    it("rejects 3 score signers even when 2 oracles abstain", async function () {
+      const uid = ethers.id("canary-03-three-score-two-abstain");
+      await escrow.connect(owner).fundCampaign(uid, "ipfs://canary-03", ethers.ZeroHash, { value: ethers.parseEther("0.01") });
+
+      const scores = [78, 80, 82];
+      const scoreSigs = await signEip712Score(oracles.slice(0, 3), uid, scores, escrow);
+      const reasons = [5, 5];
+      const abstainSigs = await signEip712Abstain(oracles.slice(3, 5), uid, reasons, escrow);
+
+      await expect(escrow.closeCampaign(uid, scores, scoreSigs, reasons, abstainSigs))
+        .to.be.revertedWith("Below absolute score floor");
+    });
+
+    it("slashes exactly one score outlier and preserves honest oracle stake", async function () {
+      const uid = ethers.id("canary-03-outlier-slash");
+      const bounty = ethers.parseEther("0.01");
+      await escrow.connect(owner).fundCampaign(uid, "ipfs://canary-03", ethers.ZeroHash, { value: bounty });
+
+      const scores = [75, 75, 75, 75, 25];
+      const scoreSigs = await signEip712Score(oracles.slice(0, 5), uid, scores, escrow);
+      const stakeBefore = (await registry.oracles(oracles[4].address)).stake;
+      const expectedSlash = (stakeBefore * 5n) / 100n;
+
+      const closeTx = escrow.closeCampaign(uid, scores, scoreSigs, [], []);
+      await expect(closeTx)
+        .to.emit(escrow, "CampaignClosed")
+        .withArgs(uid, owner.address, bounty, 75);
+      await expect(closeTx)
+        .to.emit(escrow, "DeviationReported")
+        .withArgs(uid, oracles[4].address, 25, 75, 50);
+      await expect(closeTx)
+        .to.emit(registry, "OracleSlashed")
+        .withArgs(oracles[4].address, expectedSlash, "Score deviation too high");
+
+      const slashedOracle = await registry.oracles(oracles[4].address);
+      expect(slashedOracle.stake).to.equal(stakeBefore - expectedSlash);
+      expect(slashedOracle.active).to.equal(false);
+      expect(await registry.slashedStakeReserve()).to.equal(expectedSlash);
+
+      for (let i = 0; i < 4; i++) {
+        const honestOracle = await registry.oracles(oracles[i].address);
+        expect(honestOracle.stake).to.equal(ethers.parseEther("0.25"));
+        expect(honestOracle.active).to.equal(true);
+      }
+    });
+
+    it("slashes each score outlier beyond MAX_DEVIATION", async function () {
+      const uid = ethers.id("canary-03-two-outliers");
+      await escrow.connect(owner).fundCampaign(uid, "ipfs://canary-03", ethers.ZeroHash, { value: ethers.parseEther("0.01") });
+
+      const scores = [80, 80, 80, 28, 25];
+      const scoreSigs = await signEip712Score(oracles.slice(0, 5), uid, scores, escrow);
+      const stakeBefore = (await registry.oracles(oracles[3].address)).stake;
+      const expectedSlash = (stakeBefore * 5n) / 100n;
+
+      const closeTx = escrow.closeCampaign(uid, scores, scoreSigs, [], []);
+      await expect(closeTx)
+        .to.emit(registry, "OracleSlashed")
+        .withArgs(oracles[3].address, expectedSlash, "Score deviation too high");
+      await expect(closeTx)
+        .to.emit(registry, "OracleSlashed")
+        .withArgs(oracles[4].address, expectedSlash, "Score deviation too high");
+
+      expect((await registry.oracles(oracles[3].address)).active).to.equal(false);
+      expect((await registry.oracles(oracles[4].address)).active).to.equal(false);
+      expect(await registry.slashedStakeReserve()).to.equal(expectedSlash * 2n);
+    });
+
+    it("does not slash a score at the MAX_DEVIATION boundary", async function () {
+      const uid = ethers.id("canary-03-boundary-no-slash");
+      const bounty = ethers.parseEther("0.01");
+      await escrow.connect(owner).fundCampaign(uid, "ipfs://canary-03", ethers.ZeroHash, { value: bounty });
+
+      const scores = [80, 80, 80, 80, 55];
+      const scoreSigs = await signEip712Score(oracles.slice(0, 5), uid, scores, escrow);
+
+      await expect(escrow.closeCampaign(uid, scores, scoreSigs, [], []))
+        .to.emit(escrow, "CampaignClosed")
+        .withArgs(uid, owner.address, bounty, 80);
+
+      expect(await registry.slashedStakeReserve()).to.equal(0n);
+      for (let i = 0; i < 5; i++) {
+        expect((await registry.oracles(oracles[i].address)).active).to.equal(true);
+      }
+    });
+
+    it("slashes a below-threshold individual score when the median passes", async function () {
+      const uid = ethers.id("canary-03-below-threshold-individual-slash");
+      const bounty = ethers.parseEther("0.01");
+      await escrow.connect(owner).fundCampaign(uid, "ipfs://canary-03", ethers.ZeroHash, { value: bounty });
+
+      const scores = [80, 80, 80, 80, 54];
+      const scoreSigs = await signEip712Score(oracles.slice(0, 5), uid, scores, escrow);
+      const stakeBefore = (await registry.oracles(oracles[4].address)).stake;
+      const expectedSlash = (stakeBefore * 5n) / 100n;
+
+      const closeTx = escrow.closeCampaign(uid, scores, scoreSigs, [], []);
+      await expect(closeTx)
+        .to.emit(escrow, "CampaignClosed")
+        .withArgs(uid, owner.address, bounty, 80);
+      await expect(closeTx)
+        .to.emit(registry, "OracleSlashed")
+        .withArgs(oracles[4].address, expectedSlash, "Score deviation too high");
+
+      expect((await registry.oracles(oracles[4].address)).active).to.equal(false);
+      expect(await registry.slashedStakeReserve()).to.equal(expectedSlash);
+    });
   });
 });

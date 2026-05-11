@@ -5,6 +5,7 @@ const path = require("node:path");
 const ALLOWED_RUNTIME_MODES = Object.freeze(["mainnet", "testnet", "demo"]);
 const RUNTIME_MODE_ENV = "VENOM_RUNTIME_MODE";
 const TEST_PAYLOAD_ENV = "USE_TEST_PAYLOAD";
+const CANARY_FORCE_PASS_ENV = "CANARY_FORCE_PASS";
 const DEFAULT_ARTIFACT_ROOT = ".venom-artifacts";
 
 function normalizeRuntimeMode(value) {
@@ -53,6 +54,10 @@ function validateRuntimeModeConfig(env = process.env) {
     errors.push(`${RUNTIME_MODE_ENV}=${runtimeMode} cannot run with ${TEST_PAYLOAD_ENV}=true.`);
   }
 
+  if ((runtimeMode === "mainnet" || runtimeMode === "testnet") && String(env[CANARY_FORCE_PASS_ENV] || "").trim().toLowerCase() === "true") {
+    errors.push(`${RUNTIME_MODE_ENV}=${runtimeMode} cannot run with ${CANARY_FORCE_PASS_ENV}=true.`);
+  }
+
   const artifactRoot = env.VENOM_ARTIFACT_ROOT || DEFAULT_ARTIFACT_ROOT;
 
   return {
@@ -85,6 +90,7 @@ module.exports = {
   ALLOWED_RUNTIME_MODES,
   RUNTIME_MODE_ENV,
   TEST_PAYLOAD_ENV,
+  CANARY_FORCE_PASS_ENV,
   validateRuntimeModeConfig,
   assertRuntimeModeConfig,
   describeRuntimeMode,

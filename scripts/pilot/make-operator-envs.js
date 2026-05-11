@@ -4,24 +4,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { ethers } = require('ethers');
+const {
+  PROFILE_CONSTANTS,
+  QUEUE_SUFFIX_PATTERN,
+  shouldUseBootstrapDiscoveryForProfile: profileUsesBootstrapDiscovery,
+} = require('./profiles');
 
 const DEFAULT_PROFILE = 'canary-01-5';
 const DEFAULT_HEALTH_PORT_BASE = 3000;
-const QUEUE_SUFFIX_PATTERN = /^[a-zA-Z0-9._-]{1,64}$/;
 const LISTEN_PORT_BASE = 42000;
-const BOOTSTRAP_DISCOVERY_PROFILES = new Set(['canary-01-5']);
-
-const PROFILE_CONSTANTS = Object.freeze({
-  'canary-01-5': Object.freeze({
-    REQUIRED_ORACLES: 3,
-    SCORE_QUORUM_PCT: 50,
-    PARTICIPATION_FLOOR_PCT: 67,
-    CAMPAIGN_TIMEOUT_BLOCKS: 3600,
-    MIN_STAKE: '100000000000000000',
-    SLASH_PERCENT: 5,
-    MAX_DEVIATION: 25,
-  }),
-});
 
 class MakeEnvsError extends Error {
   constructor(code, message) {
@@ -151,6 +142,9 @@ function validateDeploymentArtifact(artifact, expectedProfile) {
   if (!artifact || typeof artifact !== 'object') {
     throw makeError('MAKE_ENVS_DEPLOYMENT_INVALID', 'Deployment artifact must be a JSON object');
   }
+  if (artifact.schemaVersion !== 1) {
+    throw makeError('MAKE_ENVS_DEPLOYMENT_INVALID', 'schemaVersion must equal 1');
+  }
   const profile = artifact.profile;
   if (!profile || profile.name !== expectedProfile) {
     throw makeError(
@@ -165,16 +159,31 @@ function validateDeploymentArtifact(artifact, expectedProfile) {
 
   const registry = normalizeAddress(artifact.contracts?.VenomRegistry?.address, 'contracts.VenomRegistry.address');
   const escrow = normalizeAddress(artifact.contracts?.PilotEscrow?.address, 'contracts.PilotEscrow.address');
+  if (!artifact.binding || typeof artifact.binding !== 'object' || Array.isArray(artifact.binding)) {
+    throw makeError('MAKE_ENVS_DEPLOYMENT_INVALID', 'binding must be a JSON object');
+  }
+  const boundEscrow = normalizeAddress(artifact.binding.registryPilotEscrow, 'binding.registryPilotEscrow');
+  if (boundEscrow !== escrow) {
+    throw makeError('MAKE_ENVS_DEPLOYMENT_INVALID', 'binding.registryPilotEscrow does not match contracts.PilotEscrow.address');
+  }
+  const pendingEscrow = normalizeAddress(artifact.binding.pendingPilotEscrow, 'binding.pendingPilotEscrow');
+  if (pendingEscrow !== ethers.ZeroAddress) {
+    throw makeError('MAKE_ENVS_DEPLOYMENT_INVALID', 'binding.pendingPilotEscrow must be the zero address');
+  }
+  const boundRegistry = normalizeAddress(artifact.binding.escrowRegistry, 'binding.escrowRegistry');
+  if (boundRegistry !== registry) {
+    throw makeError('MAKE_ENVS_DEPLOYMENT_INVALID', 'binding.escrowRegistry does not match contracts.VenomRegistry.address');
+  }
   if (typeof artifact.network !== 'string' || !artifact.network.trim()) {
     throw makeError('MAKE_ENVS_DEPLOYMENT_INVALID', 'network is required');
   }
-  if (!Number.isSafeInteger(Number(artifact.chainId))) {
-    throw makeError('MAKE_ENVS_DEPLOYMENT_INVALID', 'chainId is required');
+  if (typeof artifact.chainId !== 'number' || !Number.isSafeInteger(artifact.chainId) || artifact.chainId <= 0) {
+    throw makeError('MAKE_ENVS_DEPLOYMENT_INVALID', 'chainId must be a positive integer');
   }
 
   return {
     network: artifact.network,
-    chainId: Number(artifact.chainId),
+    chainId: artifact.chainId,
     registry,
     escrow,
     profile: expectedProfile,
@@ -230,7 +239,7 @@ function writePrivateEnv(filePath, body) {
 }
 
 function shouldUseBootstrapDiscoveryForProfile(profile) {
-  return BOOTSTRAP_DISCOVERY_PROFILES.has(profile);
+  return profileUsesBootstrapDiscovery(profile);
 }
 
 function shouldSkipRegistryDialForProfile(profile) {
@@ -266,6 +275,8 @@ function buildOperatorEnv({ operatorIndex, count, deployment, healthPort, privat
     '',
     `HEALTH_PORT=${healthPort}`,
     'HEALTH_HOST=127.0.0.1',
+    '',
+    'P2P_KEYSTORE_PATH=/app/.venom/libp2p-key',
     '',
     'VENOM_ALLOW_PRIVATE_MULTIADDR=false',
     ...(useBootstrapDiscovery ? [
@@ -355,6 +366,8 @@ function buildCompose({ profile, operators, outDir, composeOut }) {
       '        required: false',
       `      - path: ${toComposePath(envPath, composeDir)}`,
       '        required: true',
+      '    volumes:',
+      `      - venom_node_${profile}_${operator.index}_keystore:/app/.venom`,
       '    environment:',
       '      - NODE_ENV=production',
       '      - VENOM_RUNTIME_MODE=testnet',
@@ -376,14 +389,36 @@ function buildCompose({ profile, operators, outDir, composeOut }) {
     );
   }
 
-  lines.push('', 'volumes:', '  redis_canary_data:', '');
-  return `# Generated for ${profile}. Run with: docker compose --project-name canary -f ${path.basename(composeOut)} up -d --build\n${lines.join('\n')}`;
+  lines.push('', 'volumes:', '  redis_canary_data:');
+  for (const operator of operators) {
+    lines.push(`  venom_node_${profile}_${operator.index}_keystore:`);
+  }
+  lines.push('');
+
+  return [
+    `# Generated for ${profile}.`,
+    `# Run with: docker compose --project-name ${profile} -f ${path.basename(composeOut)} up -d --build`,
+    `# Reset between runs: docker compose --project-name ${profile} -f ${path.basename(composeOut)} down -v`,
+    lines.join('\n'),
+  ].join('\n');
 }
 
-function buildFundingTargets(operators, generatedAt) {
+function recommendedFundingFloorEth(profile) {
+  const constants = PROFILE_CONSTANTS[profile];
+  if (!constants) {
+    throw makeError('MAKE_ENVS_PROFILE_MISMATCH', `Unsupported deployment profile: ${profile}`);
+  }
+
+  const stakePlusGas = BigInt(constants.MIN_STAKE) + ethers.parseEther('0.02');
+  const minimumFloor = profile === 'canary-01-5' ? ethers.parseEther('0.16') : 0n;
+  const floor = stakePlusGas > minimumFloor ? stakePlusGas : minimumFloor;
+  return ethers.formatEther(floor);
+}
+
+function buildFundingTargets(operators, generatedAt, profile) {
   return [
-    '# Canary 01.5 funding targets - addresses derived from generated keys.',
-    '# Recommended balance: 0.16-0.20 ETH per address on Base Sepolia.',
+    `# ${profile} funding targets - addresses derived from generated keys.`,
+    `# Recommended balance: at least ${recommendedFundingFloorEth(profile)} ETH per address on Base Sepolia.`,
     `# Generated ${generatedAt}.`,
     ...operators.map((operator) => `${operator.id} ${operator.address}`),
     '',
@@ -467,7 +502,7 @@ function generateOperatorFiles(options, deps = {}) {
 
     const manifest = buildManifest({ deployment, operators, generatedAt });
     fs.writeFileSync(path.join(tmpDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-    fs.writeFileSync(path.join(tmpDir, 'funding-targets.txt'), buildFundingTargets(operators, generatedAt), 'utf8');
+    fs.writeFileSync(path.join(tmpDir, 'funding-targets.txt'), buildFundingTargets(operators, generatedAt, deployment.profile), 'utf8');
     fs.writeFileSync(tmpCompose, buildCompose({ profile: options.profile, operators, outDir, composeOut }), 'utf8');
 
     if (options.force) {

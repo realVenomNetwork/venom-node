@@ -5,6 +5,8 @@ const http = require('http');
 const { assertRuntimeModeConfig, describeRuntimeMode } = require('./src/config/runtime-mode');
 const { isPrivateOrWildcardMultiaddr } = require('./src/utils/multiaddr');
 const { closeQueueResources, reconnectRedis } = require('./aggregator/queue');
+const readiness = require('./src/observability/readiness');
+const canaryEvents = require('./src/observability/canary-events');
 
 const VERSION = "1.0.1";
 const VENOM_REGISTRY_ADDRESS = process.env.VENOM_REGISTRY_ADDRESS;
@@ -21,6 +23,7 @@ let producerHandle = null;
 let workerHandle = null;
 let runtimeModeConfig = null;
 let httpServer = null;
+let canaryEventsHandle = null;
 
 function validateEnv() {
   runtimeModeConfig = assertRuntimeModeConfig(process.env);
@@ -48,6 +51,7 @@ async function shutdown(signal) {
   console.log(`\n${signal} received, shutting down VENOM Node (HTTP server: ${httpServer ? 'stopping' : 'not running'})...`);
   let exitCode = 0;
   try {
+    if (canaryEventsHandle && typeof canaryEventsHandle.stop === 'function') canaryEventsHandle.stop();
     if (workerHandle) await workerHandle.close();
     if (producerHandle?.stop) producerHandle.stop();
     if (p2pNode) await p2pNode.stop();
@@ -65,38 +69,60 @@ async function shutdown(signal) {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-function startHealthServer() {
-  const port = Number(process.env.HEALTH_PORT || 3000);
-  const host = process.env.HEALTH_HOST || '127.0.0.1';
+function startHealthServer({ getDeps, version = VERSION, port, host, logger = console.log } = {}) {
+  const effectivePort = Number(port !== undefined ? port : (process.env.HEALTH_PORT || 3000));
+  const effectiveHost = host !== undefined ? host : (process.env.HEALTH_HOST || '127.0.0.1');
 
   const server = http.createServer(async (req, res) => {
-    if (req.url === '/health' || req.url === '/healthz') {
+    if (req.url === '/health') {
+      let statusCode = 503;
+      const body = {
+        status: 'error',
+        version,
+        timestamp: new Date().toISOString(),
+      };
       try {
-        const { getConnection } = require('./aggregator/queue');
-        const conn = getConnection();
-        await conn.ping();
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          status: 'ok',
-          version: VERSION,
-          timestamp: new Date().toISOString()
-        }));
+        const deps = typeof getDeps === 'function' ? getDeps() : {};
+        const redis = await readiness.probeRedis(deps.queueModule);
+        if (redis.ok) {
+          statusCode = 200;
+          body.status = 'ok';
+        } else {
+          body.error = redis.reason || 'redis check failed';
+        }
       } catch (err) {
-        res.writeHead(503, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'error', error: err.message }));
+        body.error = err.message;
       }
+      res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    } else if (req.url === '/healthz') {
+      let status;
+      try {
+        const deps = typeof getDeps === 'function' ? getDeps() : {};
+        status = await readiness.computeAsync({ ...deps, version });
+      } catch (err) {
+        status = {
+          ok: false,
+          version,
+          timestamp: new Date().toISOString(),
+          checks: {},
+          error: err.message,
+        };
+      }
+      res.writeHead(status.ok ? 200 : 503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(status));
     } else if (req.url === '/') {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end(`VENOM Node v${VERSION}`);
+      res.end(`VENOM Node v${version}`);
     } else {
       res.writeHead(404);
       res.end();
     }
   });
 
-  server.listen(port, host, () => {
-    console.log(`[Health] Server listening on http://${host}:${port}`);
+  server.listen(effectivePort, effectiveHost, () => {
+    const boundPort = (server.address() && server.address().port) || effectivePort;
+    logger(`[Health] Server listening on http://${effectiveHost}:${boundPort}`);
   });
 
   return server;
@@ -117,7 +143,14 @@ async function main() {
   console.log(`Starting VENOM Node v${VERSION}...`);
   console.log(`Runtime guardrails: ${describeRuntimeMode(runtimeModeConfig)}`);
 
-  const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+  const rpcUrls = (process.env.RPC_URLS || process.env.RPC_URL || "https://base-sepolia-rpc.publicnode.com")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+
+  const MultiRpcProvider = require('./rpc/router');
+  const multiProvider = new MultiRpcProvider(rpcUrls);
+  const provider = multiProvider.getProvider();
   const wallet = new ethers.Wallet(getOperatorPrivateKey(), provider);
 
   const registry = new ethers.Contract(VENOM_REGISTRY_ADDRESS, [
@@ -194,12 +227,28 @@ async function main() {
   console.log(`\nVENOM Node v${VERSION} is fully operational.`);
 }
 
-main().then(() => {
-  httpServer = startHealthServer();
-}).catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().then(() => {
+    const queueModule = require('./aggregator/queue');
+    const p2pModule = require('./aggregator/p2p');
+    const producerModule = require('./aggregator/producer');
+    const getDeps = () => ({
+      p2pNode,
+      p2pStatus: typeof p2pModule.getNodeStatus === 'function' ? p2pModule.getNodeStatus() : null,
+      workerHandle,
+      producerHandle,
+      producerStatus: typeof producerModule.getProducerStatus === 'function' ? producerModule.getProducerStatus() : null,
+      queueModule,
+    });
+    httpServer = startHealthServer({ getDeps, version: VERSION });
+    canaryEventsHandle = canaryEvents.startFromEnv({
+      getDeps: () => ({ ...getDeps(), version: VERSION }),
+    });
+  }).catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
 
 module.exports = {
   validateEnv,

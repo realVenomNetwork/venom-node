@@ -24,8 +24,19 @@ const FETCH_TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS || "15000", 10);
 const IPFS_CONCURRENT_FETCH = parseInt(process.env.IPFS_CONCURRENT_FETCH || "3", 10);
 const IPFS_GATEWAY_TIMEOUT = parseInt(process.env.IPFS_GATEWAY_TIMEOUT || "8000", 10);
 const ML_TIMEOUT_MS = parseInt(process.env.ML_TIMEOUT_MS || "30000", 10);
+const JOB_LOCK_BUFFER_MS = 20000;
+const JOB_LOCK_FETCH_BUDGET_MS = Math.max(FETCH_TIMEOUT_MS, IPFS_GATEWAY_TIMEOUT);
+const DEFAULT_JOB_LOCK_DURATION_MS = JOB_LOCK_FETCH_BUDGET_MS + ML_TIMEOUT_MS + JOB_LOCK_BUFFER_MS;
+const JOB_LOCK_DURATION_MS = parseInt(
+  process.env.JOB_LOCK_DURATION_MS || process.env.WORKER_JOB_TIMEOUT_MS || String(DEFAULT_JOB_LOCK_DURATION_MS),
+  10
+);
+const WORKER_JOB_TIMEOUT_MS = JOB_LOCK_DURATION_MS;
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || "4", 10);
 const PROCESSED_CAMPAIGN_TTL_SECONDS = parseInt(process.env.PROCESSED_CAMPAIGN_TTL_SECONDS || "86400", 10);
+const PENDING_DELIVERY_TTL_SECONDS = parseInt(process.env.PENDING_DELIVERY_TTL_SECONDS || "3600", 10);
+const PENDING_DELIVERY_SCAN_BATCH = parseInt(process.env.PENDING_DELIVERY_SCAN_BATCH || "100", 10);
+const PENDING_DELIVERY_KEY_PREFIX = "venom:worker:pending";
 const FETCH_FAILURE_PRECEDENCE = ["PayloadTooLarge", "HashMismatch", "NotFound", "Timeout", "FetchFailed"];
 const SCORE_MAX = parseInt(process.env.SCORE_MAX || "100", 10);
 const SCORE_MIN = parseInt(process.env.SCORE_MIN || "0", 10);
@@ -110,6 +121,20 @@ function assertTestPayloadAllowed() {
   assertRuntimeModeConfig(process.env);
 }
 
+function assertWorkerLockConfig() {
+  const minimumTimeout = JOB_LOCK_FETCH_BUDGET_MS + ML_TIMEOUT_MS + JOB_LOCK_BUFFER_MS;
+  if (!Number.isFinite(JOB_LOCK_DURATION_MS) || JOB_LOCK_DURATION_MS < minimumTimeout) {
+    throw new Error(
+      `JOB_LOCK_DURATION_MS must be at least ${minimumTimeout}ms ` +
+      `(fetch budget=${JOB_LOCK_FETCH_BUDGET_MS}ms + ML_TIMEOUT_MS=${ML_TIMEOUT_MS}ms + ${JOB_LOCK_BUFFER_MS}ms buffer).`
+    );
+  }
+}
+
+function assertWorkerTimeoutConfig() {
+  return assertWorkerLockConfig();
+}
+
 function normalizeCid(input) {
   if (!input || typeof input !== "string") return "";
   const trimmed = input.trim();
@@ -145,6 +170,11 @@ function getProcessedCampaignKey(campaignUid) {
   return `venom:worker:processed:${wallet.address.toLowerCase()}:${campaignUid}`;
 }
 
+function getPendingDeliveryKey(campaignUid) {
+  const { wallet } = getWorkerRuntime();
+  return `${PENDING_DELIVERY_KEY_PREFIX}:${wallet.address.toLowerCase()}:${campaignUid}`;
+}
+
 async function hasProcessedCampaign(campaignUid) {
   return Boolean(await getConnection().get(getProcessedCampaignKey(campaignUid)));
 }
@@ -156,6 +186,76 @@ async function markCampaignProcessed(campaignUid) {
     "EX",
     PROCESSED_CAMPAIGN_TTL_SECONDS
   );
+}
+
+async function markCampaignProcessedAndClearDelivery(campaignUid) {
+  await markCampaignProcessed(campaignUid);
+  await deletePendingDelivery(campaignUid);
+}
+
+async function getPendingDelivery(campaignUid) {
+  const raw = await getConnection().get(getPendingDeliveryKey(campaignUid));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function setPendingDelivery(campaignUid, delivery) {
+  await getConnection().set(
+    getPendingDeliveryKey(campaignUid),
+    JSON.stringify({ ...delivery, campaignUid, timestamp: Date.now() }),
+    "EX",
+    PENDING_DELIVERY_TTL_SECONDS
+  );
+}
+
+async function deletePendingDelivery(campaignUid) {
+  await getConnection().del(getPendingDeliveryKey(campaignUid));
+}
+
+async function publishPendingDelivery(campaignUid, delivery) {
+  if (!delivery || typeof delivery !== "object") return false;
+  if (delivery.type === "score" && Number.isInteger(delivery.score) && typeof delivery.signature === "string") {
+    await publishSignature(campaignUid, delivery.score, delivery.signature);
+    return true;
+  }
+  if (delivery.type === "abstain" && Number.isInteger(delivery.reasonCode) && typeof delivery.signature === "string") {
+    await publishAbstain(campaignUid, delivery.reasonCode, delivery.signature, delivery.reasonLabel || "");
+    return true;
+  }
+  return false;
+}
+
+async function retryPendingDeliveries() {
+  const { wallet } = getWorkerRuntime();
+  const conn = getConnection();
+  const keyPrefix = `${PENDING_DELIVERY_KEY_PREFIX}:${wallet.address.toLowerCase()}:`;
+  const pattern = `${keyPrefix}*`;
+  let cursor = "0";
+
+  do {
+    const [nextCursor, keys] = await conn.scan(cursor, "MATCH", pattern, "COUNT", PENDING_DELIVERY_SCAN_BATCH);
+    cursor = String(nextCursor);
+
+    for (const key of keys) {
+      const campaignUid = key.slice(keyPrefix.length);
+      const delivery = await getPendingDelivery(campaignUid);
+      if (!delivery) continue;
+
+      try {
+        if (await publishPendingDelivery(campaignUid, delivery)) {
+          await markCampaignProcessed(campaignUid);
+          await deletePendingDelivery(campaignUid);
+          console.log(`[Worker] Re-published pending delivery for ${campaignUid}`);
+        }
+      } catch (error) {
+        console.warn(`[Worker] Pending delivery retry failed for ${campaignUid}: ${error.message}`);
+      }
+    }
+  } while (cursor !== "0");
 }
 
 async function readLimitedText(response) {
@@ -332,6 +432,12 @@ async function publishSignedAbstain(campaignUid, reason) {
   }).catch((error) => {
     console.warn(`[Dashboard] Failed to record local abstain: ${error.message}`);
   });
+  await setPendingDelivery(campaignUid, {
+    type: "abstain",
+    reasonCode,
+    reasonLabel: reason,
+    signature,
+  });
   await publishAbstain(campaignUid, reasonCode, signature, reason);
 }
 
@@ -355,6 +461,11 @@ async function publishSignedScore(campaignUid, scoreInt) {
     message: `This node produced a signed score: ${scoreInt}.`
   }).catch((error) => {
     console.warn(`[Dashboard] Failed to record local score: ${error.message}`);
+  });
+  await setPendingDelivery(campaignUid, {
+    type: "score",
+    score: scoreInt,
+    signature,
   });
   await publishSignature(campaignUid, scoreInt, signature);
 }
@@ -392,7 +503,7 @@ async function processCampaign(job) {
     } else if (!cid) {
       console.log(`  -> Missing payload CID. Publishing signed abstain.`);
       await publishSignedAbstain(campaignUid, "MissingPayload");
-      await markCampaignProcessed(campaignUid);
+      await markCampaignProcessedAndClearDelivery(campaignUid);
       return;
     } else {
       try {
@@ -404,7 +515,7 @@ async function processCampaign(job) {
           if (computedHash.toLowerCase() !== contentHash.toLowerCase()) {
             console.log(`  -> Content hash mismatch (expected ${contentHash}, got ${computedHash}). Publishing signed abstain.`);
             await publishSignedAbstain(campaignUid, "HashMismatch");
-            await markCampaignProcessed(campaignUid);
+            await markCampaignProcessedAndClearDelivery(campaignUid);
             return;
           }
         }
@@ -414,7 +525,7 @@ async function processCampaign(job) {
           : "FetchFailed";
         console.log(`  -> Fetch failed (${reason}). Publishing signed abstain.`);
         await publishSignedAbstain(campaignUid, reason);
-        await markCampaignProcessed(campaignUid);
+        await markCampaignProcessedAndClearDelivery(campaignUid);
         return;
       }
     }
@@ -427,14 +538,14 @@ async function processCampaign(job) {
     } catch (error) {
       console.log(`  -> ML service failed (${error.message}). Publishing signed abstain.`);
       await publishSignedAbstain(campaignUid, "MLServiceFailed");
-      await markCampaignProcessed(campaignUid);
+      await markCampaignProcessedAndClearDelivery(campaignUid);
       return;
     }
 
     if (!scoreResult.passes_threshold) {
       console.log(`  -> Below threshold (score ${scoreResult.final_score}). Publishing signed abstain.`);
       await publishSignedAbstain(campaignUid, "BelowThreshold");
-      await markCampaignProcessed(campaignUid);
+      await markCampaignProcessedAndClearDelivery(campaignUid);
       return;
     }
 
@@ -442,11 +553,11 @@ async function processCampaign(job) {
     if (!Number.isInteger(scoreInt) || scoreInt < SCORE_MIN || scoreInt > SCORE_MAX) {
       console.warn(`  -> ML score out of range (${scoreResult.final_score}). Publishing signed abstain.`);
       await publishSignedAbstain(campaignUid, "MLServiceFailed");
-      await markCampaignProcessed(campaignUid);
+      await markCampaignProcessedAndClearDelivery(campaignUid);
       return;
     }
     await publishSignedScore(campaignUid, scoreInt);
-    await markCampaignProcessed(campaignUid);
+    await markCampaignProcessedAndClearDelivery(campaignUid);
     console.log(`  -> Evaluated and signed score ${scoreInt} for ${campaignUid}`);
   } catch (err) {
     console.error(`Failed: ${campaignUid}`, err.message);
@@ -455,6 +566,10 @@ async function processCampaign(job) {
 }
 
 async function startWorker() {
+  assertRuntimeModeConfig(process.env);
+  assertWorkerTimeoutConfig();
+  await retryPendingDeliveries();
+
   const { wallet } = getWorkerRuntime();
 
   const worker = new Worker(QUEUE_NAME, processCampaign, {
@@ -467,12 +582,14 @@ async function startWorker() {
       maxDelay: 30000
     },
     removeOnComplete: { count: 100 },
-    removeOnFail: { count: 200 }
+    removeOnFail: { count: 200 },
+    lockDuration: JOB_LOCK_DURATION_MS,
+    lockRenewalTime: Math.max(1000, Math.floor(JOB_LOCK_DURATION_MS / 2))
   });
 
   console.log("Starting VENOM Worker v1.1.0 (BullMQ + signed abstention + IPFS concurrent fallback)");
   console.log(`   Address: ${wallet.address} | Queue: ${QUEUE_NAME}${OPERATOR_QUEUE_SUFFIX ? ` | Queue suffix: ${OPERATOR_QUEUE_SUFFIX}` : ""}`);
-  console.log(`   Concurrency: ${WORKER_CONCURRENCY} | Gateways: ${IPFS_GATEWAYS.length} | ML: ${ML_SERVICE_URL}\n`);
+  console.log(`   Concurrency: ${WORKER_CONCURRENCY} | Gateways: ${IPFS_GATEWAYS.length} | ML: ${ML_SERVICE_URL} | Job lock: ${JOB_LOCK_DURATION_MS}ms\n`);
 
   worker.on('failed', (job, err) => console.error(`Job ${job.id} failed:`, err.message));
   return worker;
@@ -494,7 +611,17 @@ module.exports = {
   selectFailureReason,
   getAbstainReasonCode,
   getProcessedCampaignKey,
+  getPendingDeliveryKey,
+  getPendingDelivery,
+  setPendingDelivery,
+  deletePendingDelivery,
+  retryPendingDeliveries,
+  markCampaignProcessedAndClearDelivery,
   readLimitedText,
   scoreWithFastAPI,
-  computeContentHash
+  computeContentHash,
+  JOB_LOCK_DURATION_MS,
+  WORKER_JOB_TIMEOUT_MS,
+  assertWorkerTimeoutConfig,
+  assertWorkerLockConfig
 };

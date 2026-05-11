@@ -16,6 +16,11 @@ class MultiRpcProvider {
     this.healthCheckInterval = options.healthCheckInterval || HEALTH_CHECK_INTERVAL;
     this.healthCheckTimer = null;
 
+    this.providerFactory = options.providerFactory || ((url) => new ethers.JsonRpcProvider(url, undefined, {
+      polling: true,
+      pollingInterval: 4000
+    }));
+
     this.providerStatus = urls.map((url) => ({
       failures: 0,
       lastFailure: 0,
@@ -31,6 +36,7 @@ class MultiRpcProvider {
 
     this.currentIndex = 0;
     this.provider = this.providers[0];
+    this.providerProxy = null;
 
     this._startHealthChecks();
 
@@ -52,10 +58,7 @@ class MultiRpcProvider {
   }
 
   _createProvider(url) {
-    return new ethers.JsonRpcProvider(url, undefined, {
-      polling: true,
-      pollingInterval: 4000
-    });
+    return this.providerFactory(url);
   }
 
   _getNextUrl() {
@@ -108,7 +111,7 @@ class MultiRpcProvider {
 
         console.warn(`[MultiRPC] Attempt ${attempt + 1} failed on ${this.urls[this.currentIndex]}: ${err.message}`);
 
-        if (err.message.includes("429") || err.message.includes("Timeout") || err.message.includes("limit")) {
+        if (this.urls.length > 1) {
           this._getNextUrl();
         }
       }
@@ -127,6 +130,9 @@ class MultiRpcProvider {
         }
       }
     }, this.healthCheckInterval);
+    if (typeof this.healthCheckTimer.unref === "function") {
+      this.healthCheckTimer.unref();
+    }
   }
 
   async _checkProviderHealth(index) {
@@ -161,7 +167,25 @@ class MultiRpcProvider {
   }
 
   getProvider() {
-    return this.provider;
+    if (!this.providerProxy) {
+      this.providerProxy = new Proxy({}, {
+        get: (_target, prop) => {
+          if (prop in this && prop !== 'provider' && typeof this[prop] === 'function') {
+            return this[prop].bind(this);
+          }
+          const value = this.provider[prop];
+          if (typeof value === 'function') {
+            return (...args) => this._callWithFallback(prop, ...args);
+          }
+          return value;
+        },
+        getPrototypeOf: () => Object.getPrototypeOf(this.provider),
+        has: (_target, prop) => {
+          return prop in this || prop in this.provider;
+        }
+      });
+    }
+    return this.providerProxy;
   }
 
   async call(...args) {

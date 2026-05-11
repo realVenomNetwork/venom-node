@@ -22,6 +22,17 @@ function walletFactory(index) {
   return new ethers.Wallet(`0x${String(index).padStart(64, '0')}`);
 }
 
+function writeDeploymentArtifact(root, profileName, constants) {
+  const artifact = JSON.parse(fs.readFileSync(fixtureDeployment, 'utf8'));
+  artifact.profile = {
+    name: profileName,
+    constants,
+  };
+  const artifactPath = path.join(root, `deployment-${profileName}.json`);
+  fs.writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
+  return artifactPath;
+}
+
 describe('make-operator-envs', function () {
   let root;
 
@@ -73,6 +84,92 @@ describe('make-operator-envs', function () {
       .with.property('code', 'MAKE_ENVS_PROFILE_MISMATCH');
   });
 
+  it('rejects deployment artifacts with mismatched profile names', function () {
+    const artifact = JSON.parse(fs.readFileSync(fixtureDeployment, 'utf8'));
+
+    expect(() => validateDeploymentArtifact(artifact, 'canary-03'))
+      .to.throw(MakeEnvsError)
+      .with.property('code', 'MAKE_ENVS_PROFILE_MISMATCH');
+  });
+
+  it('rejects deployment artifacts with invalid schemaVersion', function () {
+    const artifact = JSON.parse(fs.readFileSync(fixtureDeployment, 'utf8'));
+    artifact.schemaVersion = 2;
+
+    expect(() => validateDeploymentArtifact(artifact, 'canary-01-5'))
+      .to.throw(MakeEnvsError)
+      .with.property('code', 'MAKE_ENVS_DEPLOYMENT_INVALID');
+  });
+
+  it('rejects deployment artifacts with missing profile constants', function () {
+    const artifact = JSON.parse(fs.readFileSync(fixtureDeployment, 'utf8'));
+    delete artifact.profile.constants.MIN_STAKE;
+
+    expect(() => validateDeploymentArtifact(artifact, 'canary-01-5'))
+      .to.throw(MakeEnvsError)
+      .with.property('code', 'MAKE_ENVS_DEPLOYMENT_INVALID');
+  });
+
+  it('rejects deployment artifacts with invalid chainId', function () {
+    const artifact = JSON.parse(fs.readFileSync(fixtureDeployment, 'utf8'));
+    artifact.chainId = 'not-a-number';
+
+    expect(() => validateDeploymentArtifact(artifact, 'canary-01-5'))
+      .to.throw(MakeEnvsError)
+      .with.property('code', 'MAKE_ENVS_DEPLOYMENT_INVALID');
+  });
+
+  it('rejects deployment artifacts with coerced or non-positive chainId values', function () {
+    for (const chainId of ['84532', 0, -1, null, false, '']) {
+      const artifact = JSON.parse(fs.readFileSync(fixtureDeployment, 'utf8'));
+      artifact.chainId = chainId;
+
+      expect(() => validateDeploymentArtifact(artifact, 'canary-01-5'))
+        .to.throw(MakeEnvsError)
+        .with.property('code', 'MAKE_ENVS_DEPLOYMENT_INVALID');
+    }
+  });
+
+  it('rejects deployment artifacts with blank network names', function () {
+    const artifact = JSON.parse(fs.readFileSync(fixtureDeployment, 'utf8'));
+    artifact.network = '   ';
+
+    expect(() => validateDeploymentArtifact(artifact, 'canary-01-5'))
+      .to.throw(MakeEnvsError)
+      .with.property('code', 'MAKE_ENVS_DEPLOYMENT_INVALID');
+  });
+
+  it('rejects deployment artifacts with stale binding data', function () {
+    const artifact = JSON.parse(fs.readFileSync(fixtureDeployment, 'utf8'));
+    artifact.binding = {
+      registryPilotEscrow: ethers.ZeroAddress,
+      pendingPilotEscrow: artifact.contracts.PilotEscrow.address,
+      escrowRegistry: artifact.contracts.VenomRegistry.address,
+    };
+
+    expect(() => validateDeploymentArtifact(artifact, 'canary-01-5'))
+      .to.throw(MakeEnvsError)
+      .with.property('code', 'MAKE_ENVS_DEPLOYMENT_INVALID');
+  });
+
+  it('rejects deployment artifacts with malformed binding data', function () {
+    const artifact = JSON.parse(fs.readFileSync(fixtureDeployment, 'utf8'));
+    artifact.binding = 'not-an-object';
+
+    expect(() => validateDeploymentArtifact(artifact, 'canary-01-5'))
+      .to.throw(MakeEnvsError)
+      .with.property('code', 'MAKE_ENVS_DEPLOYMENT_INVALID');
+  });
+
+  it('rejects deployment artifacts without binding data', function () {
+    const artifact = JSON.parse(fs.readFileSync(fixtureDeployment, 'utf8'));
+    delete artifact.binding;
+
+    expect(() => validateDeploymentArtifact(artifact, 'canary-01-5'))
+      .to.throw(MakeEnvsError)
+      .with.property('code', 'MAKE_ENVS_DEPLOYMENT_INVALID');
+  });
+
   it('generates isolated operator envs, a manifest, funding targets, and compose file', function () {
     const out = path.join(root, '.venom-canary');
     const composeOut = path.join(root, 'docker-compose.canary-01-5.yml');
@@ -105,6 +202,7 @@ describe('make-operator-envs', function () {
       expect(envText).to.include(`HEALTH_PORT=${3299 + index}`);
       expect(envText).to.include('USE_TEST_PAYLOAD=false');
       expect(envText).to.include('DEPLOY_PROFILE=canary-01-5');
+      expect(envText).to.include('P2P_KEYSTORE_PATH=/app/.venom/libp2p-key');
       expect(envText).to.include('VENOM_ALLOW_PRIVATE_MULTIADDR=false');
       expect(envText).to.include('VENOM_SKIP_REGISTRY_DIAL=true');
       expect(envText).to.include(`P2P_LISTEN_PORT=${42000 + index}`);
@@ -113,6 +211,8 @@ describe('make-operator-envs', function () {
     }
 
     const fundingTargets = fs.readFileSync(path.join(out, 'funding-targets.txt'), 'utf8');
+    expect(fundingTargets).to.include('# canary-01-5 funding targets - addresses derived from generated keys.');
+    expect(fundingTargets).to.include('# Recommended balance: at least 0.16 ETH per address on Base Sepolia.');
     expect(fundingTargets).to.match(/^op1 0x[0-9A-Fa-f]{40}$/m);
     expect(fundingTargets).to.match(/^op2 0x[0-9A-Fa-f]{40}$/m);
     expect(fundingTargets).to.match(/^op3 0x[0-9A-Fa-f]{40}$/m);
@@ -122,6 +222,8 @@ describe('make-operator-envs', function () {
     expect(compose).to.include('ml-service-canary:');
     expect(compose).to.include('venom-node-canary-3:');
     expect(compose).to.include('.venom-canary/operator-3/.env');
+    expect(compose).to.include('venom_node_canary-01-5_3_keystore:/app/.venom');
+    expect(compose).to.include('venom_node_canary-01-5_3_keystore:');
     expect(compose).to.include('http://127.0.0.1:8000/health');
     expect(compose).to.not.include('http://127.0.0.1:8000/ready');
     expect(compose).to.not.include('dashboard');
@@ -129,8 +231,54 @@ describe('make-operator-envs', function () {
 
   it('enables registry-dial skip only for bootstrap canary profiles', function () {
     expect(shouldSkipRegistryDialForProfile('canary-01-5')).to.equal(true);
+    expect(shouldSkipRegistryDialForProfile('canary-03')).to.equal(false);
     expect(shouldSkipRegistryDialForProfile('production')).to.equal(false);
     expect(shouldSkipRegistryDialForProfile('solo')).to.equal(false);
+  });
+
+  it('generates canary-03 envs without the Docker bootstrap shortcut', function () {
+    const deployment = writeDeploymentArtifact(root, 'canary-03', {
+      REQUIRED_ORACLES: 4,
+      SCORE_QUORUM_PCT: 50,
+      PARTICIPATION_FLOOR_PCT: 67,
+      CAMPAIGN_TIMEOUT_BLOCKS: 3600,
+      MIN_STAKE: '250000000000000000',
+      SLASH_PERCENT: 5,
+      MAX_DEVIATION: 25,
+    });
+    const out = path.join(root, '.venom-canary-03');
+    const composeOut = path.join(root, 'docker-compose.canary-03.yml');
+
+    generateOperatorFiles({
+      count: 5,
+      deployment,
+      out,
+      profile: 'canary-03',
+      healthPortBase: 3400,
+      composeOut,
+      force: false,
+    }, { now: () => fixedDate, walletFactory, env: {} });
+
+    const envText = fs.readFileSync(path.join(out, 'operator-1', '.env'), 'utf8');
+    expect(envText).to.include('DEPLOY_PROFILE=canary-03');
+    expect(envText).to.include('P2P_KEYSTORE_PATH=/app/.venom/libp2p-key');
+    expect(envText).to.include('VENOM_ALLOW_PRIVATE_MULTIADDR=false');
+    expect(envText).to.not.include('VENOM_SKIP_REGISTRY_DIAL=true');
+    expect(envText).to.not.include('P2P_BOOTSTRAP_PEERS=');
+    expect(envText).to.not.include('P2P_LISTEN_PORT=');
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(out, 'manifest.json'), 'utf8'));
+    expect(manifest.profile).to.equal('canary-03');
+    expect(manifest.operators).to.have.length(5);
+
+    const fundingTargets = fs.readFileSync(path.join(out, 'funding-targets.txt'), 'utf8');
+    expect(fundingTargets).to.include('# canary-03 funding targets - addresses derived from generated keys.');
+    expect(fundingTargets).to.include('# Recommended balance: at least 0.27 ETH per address on Base Sepolia.');
+
+    const compose = fs.readFileSync(composeOut, 'utf8');
+    expect(compose).to.include('docker compose --project-name canary-03');
+    expect(compose).to.include('venom_node_canary-03_5_keystore:/app/.venom');
+    expect(compose).to.include('venom_node_canary-03_5_keystore:');
   });
 
   it('includes bootstrap peers and pinned port for the canary-01-5 profile', function () {

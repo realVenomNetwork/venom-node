@@ -43,7 +43,7 @@ For solo, non-production tests on machines without public P2P reachability, set 
 
 ## Deployment Profiles
 
-Deployments can set `DEPLOY_PROFILE=production`, `DEPLOY_PROFILE=canary-01-5`, or `DEPLOY_PROFILE=solo`. The profile selects bounded constructor values for `VenomRegistry.MIN_STAKE()` and the `PilotEscrow` quorum/timeout getters. `production` is the default when the variable is unset. Runtime operators should read the deployed contract values instead of assuming 5 required oracles or a 1 ETH stake.
+Deployments can set `DEPLOY_PROFILE=production`, `DEPLOY_PROFILE=canary-01-5`, `DEPLOY_PROFILE=canary-03`, or `DEPLOY_PROFILE=solo`. The profile selects bounded constructor values for `VenomRegistry.MIN_STAKE()` and the `PilotEscrow` quorum/timeout getters. `canary-01-5` uses the Docker bootstrap mesh; `canary-03` uses the full registry-dial mesh for the pre-canary-3 run. `production` is the default when the variable is unset. Runtime operators should read the deployed contract values instead of assuming 5 required oracles or a 1 ETH stake.
 
 ## Monitoring
 
@@ -52,9 +52,14 @@ docker compose logs -f venom-node
 docker compose logs -f ml-service
 ```
 
+The node exposes two health endpoints on `HEALTH_HOST` and `HEALTH_PORT`:
+
+- `GET /health` is the legacy Redis-backed health probe. It returns `{status, version, timestamp}` and returns `503` when Redis is unavailable. Use it for basic Docker health checks and monitoring.
+- `GET /healthz` is the full readiness probe. It returns `{ok, version, timestamp, checks}` with libp2p, worker, producer, and Redis details. Use it for detailed diagnostics or readiness gates.
+
 ## Current Economics
 
-- Stake required by the current registry: read `VenomRegistry.MIN_STAKE()`. The default `production` deploy profile uses `1 ETH`; `canary-01-5` uses `0.1 ETH`.
+- Stake required by the current registry: read `VenomRegistry.MIN_STAKE()`. The default `production` deploy profile uses `1 ETH`; `canary-01-5` uses `0.1 ETH`; `canary-03` uses `0.25 ETH`.
 - Current slash amount: `5%` of registered stake for score deviation beyond `MAX_DEVIATION`.
 - Operator bounty payouts are not implemented in the active `PilotEscrow` contract. The current campaign bounty is returned to the campaign recipient recorded at funding time, which is currently the funder.
 - Unstaking is implemented with `requestUnstake()` followed by `finalizeUnstake()` after a 7-day cooldown. An oracle can still be slashed during the cooldown, and slashed oracles cannot re-register after finalization.

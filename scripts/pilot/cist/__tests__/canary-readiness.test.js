@@ -57,6 +57,7 @@ function writeCanaryTree(root, manifest = makeManifest(), envOverrides = {}) {
     fs.writeFileSync(envPath, [
       `OPERATOR_PRIVATE_KEY=${privateKey}`,
       `OPERATOR_QUEUE_SUFFIX=${operator.queueSuffix}`,
+      'P2P_KEYSTORE_PATH=/app/.venom/libp2p-key',
       `VENOM_ALLOW_PRIVATE_MULTIADDR=${privateMultiaddr}`,
       '',
     ].join('\n'));
@@ -77,6 +78,17 @@ function makeContracts(overrides = {}) {
       MAX_DEVIATION: async () => overrides.MAX_DEVIATION ?? 25n,
     },
   };
+}
+
+function makeCanary03Manifest(overrides = {}) {
+  return makeManifest({
+    profile: 'canary-03',
+    operators: [
+      { id: 'op1', address: OP1, envPath: 'operator-1/.env', healthPort: 3000, queueSuffix: 'op1' },
+      { id: 'op2', address: OP2, envPath: 'operator-2/.env', healthPort: 3001, queueSuffix: 'op2' },
+    ],
+    ...overrides,
+  });
 }
 
 function makeProvider(balanceByAddress = {}) {
@@ -138,6 +150,27 @@ describe('CIST Phase 9: Canary multi-operator readiness', function () {
       operatorCount: 2,
     });
     expect(validatePhaseResult(result)).to.equal(true);
+  });
+
+  it('PASSes canary-03 manifests with 0.25 ETH stake and 4 required oracles', async function () {
+    writeCanaryTree(root, makeCanary03Manifest());
+    const result = await runPhase(root, {
+      constants: {
+        REQUIRED_ORACLES: 4n,
+        MIN_STAKE: ethers.parseEther('0.25'),
+      },
+      balances: {
+        [OP1]: ethers.parseEther('0.3'),
+        [OP2]: ethers.parseEther('0.3'),
+      },
+    });
+
+    expect(result.state).to.equal(STATE.PASS);
+    expect(result.codes).to.deep.equal([]);
+    expect(result.manifest).to.deep.include({
+      profile: 'canary-03',
+      operatorCount: 2,
+    });
   });
 
   it('FAILs on invalid manifest schema', async function () {
@@ -250,13 +283,31 @@ describe('CIST Phase 9: Canary multi-operator readiness', function () {
     fs.writeFileSync(envPath, [
       'OPERATOR_PRIVATE_KEY=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       'OPERATOR_QUEUE_SUFFIX=op1',
+      'P2P_KEYSTORE_PATH=/app/.venom/libp2p-key',
       'VENOM_ALLOW_PRIVATE_MULTIADDR=true',
     ].join('\n'));
 
     expect(parseOperatorEnvFlags(envPath)).to.deep.equal({
       privateMultiaddr: true,
       queueSuffix: 'op1',
+      p2pKeystorePath: '/app/.venom/libp2p-key',
     });
+  });
+
+  it('FAILs when an operator env omits persistent P2P keystore config', async function () {
+    writeCanaryTree(root);
+    const envPath = path.join(root, 'operator-2', '.env');
+    const envText = fs.readFileSync(envPath, 'utf8')
+      .split(/\r?\n/)
+      .filter((line) => !line.startsWith('P2P_KEYSTORE_PATH='))
+      .join('\n');
+    fs.writeFileSync(envPath, envText);
+
+    const result = await runPhase(root);
+
+    expect(result.state).to.equal(STATE.FAIL);
+    expect(result.codes).to.include('CANARY_P2P_KEYSTORE_MISSING');
+    expect(result.notes.join(' ')).to.include('op2');
   });
 
   it('does not leak private-key-shaped values into phase output', async function () {

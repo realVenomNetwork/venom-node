@@ -63,7 +63,12 @@ const POSTCARD_JSON_SCHEMA = Object.freeze({
       properties: {
         phase_3_gate: { type: "string", minLength: 1 },
         operator_payment_status: { type: "string", minLength: 1 },
-        escrow_payout_status: { type: "string", minLength: 1 }
+        escrow_payout_status: { type: "string", minLength: 1 },
+        not_in_scope: {
+          type: "array",
+          items: { type: "string", minLength: 1 },
+          minItems: 1
+        }
       }
     }
   }
@@ -188,6 +193,9 @@ function validatePostcard(postcard) {
       if (!isNonEmptyString(postcard.economic_disclosure[key])) {
         errors.push(`economic_disclosure.${key} must be a non-empty string.`);
       }
+    }
+    if (postcard.economic_disclosure.not_in_scope !== undefined) {
+      validateStringList(postcard.economic_disclosure.not_in_scope, "economic_disclosure.not_in_scope", errors);
     }
   }
 

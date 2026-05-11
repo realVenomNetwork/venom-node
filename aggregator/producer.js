@@ -15,6 +15,8 @@ const PilotEscrowABI = [
 let multiProvider = null;
 let pilotEscrow = null;
 let lastScannedBlock = null;
+let lastScanAt = null;
+let lastScanError = null;
 let producerInterval = null;
 const SCAN_LOOKBACK_BLOCKS = Number(process.env.PRODUCER_SCAN_LOOKBACK_BLOCKS || 10000);
 const REORG_LOOKBACK_BLOCKS = Number(process.env.PRODUCER_REORG_LOOKBACK_BLOCKS || 10);
@@ -112,7 +114,11 @@ async function discoverAndQueueNewCampaigns() {
       : Math.max(0, storedCursor - REORG_LOOKBACK_BLOCKS);
     const toBlock = currentBlock;
 
-    if (toBlock < fromBlock) return;
+    if (toBlock < fromBlock) {
+      lastScanAt = new Date().toISOString();
+      lastScanError = null;
+      return;
+    }
 
     console.log(`[Producer] Scanning blocks ${fromBlock} -> ${toBlock}`);
 
@@ -155,7 +161,11 @@ async function discoverAndQueueNewCampaigns() {
     }
 
     await saveLastScannedBlock(toBlock + 1);
+    lastScanAt = new Date().toISOString();
+    lastScanError = null;
   } catch (err) {
+    lastScanAt = new Date().toISOString();
+    lastScanError = err.message;
     console.error("[Producer] Discovery error:", err.message);
   }
 }
@@ -177,6 +187,15 @@ async function startProducer() {
   };
 }
 
+function getProducerStatus() {
+  return Object.freeze({
+    running: producerInterval !== null,
+    lastScannedBlock,
+    lastScanAt,
+    lastScanError,
+  });
+}
+
 if (require.main === module) {
   startProducer().catch((error) => {
     console.error(error);
@@ -188,6 +207,7 @@ module.exports = {
   startProducer,
   discoverAndQueueNewCampaigns,
   getCursorKey,
+  getProducerStatus,
   loadLastScannedBlock,
   saveLastScannedBlock,
   queryCampaignFundedEvents,

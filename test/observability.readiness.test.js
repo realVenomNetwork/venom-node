@@ -204,4 +204,46 @@ describe('observability/readiness', function () {
     expect(result.checks.producer.lastScannedBlock).to.equal(123);
     expect(result.checks.producer.lastScanError).to.equal('RPC failed');
   });
+
+  it('reports producer ok=false when lastScanError is set even though running=true', function () {
+    // Signature test for the silent-scan-failure bug. Pre-patch this
+    // would have failed: ok was driven only by `running`, so a producer
+    // whose interval keeps firing while every scan throws (RPC down)
+    // reported ok=true indefinitely.
+    const result = readiness.compute({
+      p2pNode: fakeP2P(),
+      workerHandle: fakeWorker(),
+      producerHandle: fakeProducer(),
+      producerStatus: {
+        running: true,
+        lastScannedBlock: 12345,
+        lastScanAt: '2026-05-11T10:00:00.000Z',
+        lastScanError: 'ECONNREFUSED at https://base-sepolia-rpc.publicnode.com',
+      },
+    });
+
+    expect(result.ok).to.equal(false);
+    expect(result.checks.producer.ok).to.equal(false);
+    expect(result.checks.producer.lastScanError).to.match(/ECONNREFUSED/);
+    expect(result.checks.producer.reason).to.match(/scan failing/);
+  });
+
+  it('reports producer ok=true when running=true and no lastScanError', function () {
+    // Sanity: the new condition does not over-flip a healthy producer.
+    const result = readiness.compute({
+      p2pNode: fakeP2P(),
+      workerHandle: fakeWorker(),
+      producerHandle: fakeProducer(),
+      producerStatus: {
+        running: true,
+        lastScannedBlock: 12345,
+        lastScanAt: '2026-05-11T10:00:00.000Z',
+        lastScanError: null,
+      },
+    });
+
+    expect(result.ok).to.equal(true);
+    expect(result.checks.producer.ok).to.equal(true);
+    expect(result.checks.producer).to.not.have.property('reason');
+  });
 });

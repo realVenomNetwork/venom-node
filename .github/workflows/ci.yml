@@ -48,6 +48,9 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Run pilot tests
+        run: npm run test:pilot
+
       - name: Run CIST tests
         run: npm run test:cist
 

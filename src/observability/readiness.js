@@ -55,13 +55,23 @@ function checkProducer(producerHandle, producerStatus) {
     return { ok: false, reason: 'producer not started' };
   }
   if (producerStatus) {
-    return {
-      ok: producerStatus.running !== false,
+    // A producer whose interval is firing but whose most recent scan
+    // threw is degraded, not healthy. Surfacing this through the boolean
+    // prevents /healthz from masking silent scan failures (e.g. RPC down
+    // for the entire canary run). The error is also exposed verbatim so
+    // operators can read it from the snapshot directly.
+    const ok = producerStatus.running !== false && !producerStatus.lastScanError;
+    const result = {
+      ok,
       running: producerStatus.running,
       lastScannedBlock: producerStatus.lastScannedBlock,
       lastScanAt: producerStatus.lastScanAt,
       lastScanError: producerStatus.lastScanError,
     };
+    if (!ok && producerStatus.lastScanError) {
+      result.reason = `producer scan failing: ${producerStatus.lastScanError}`;
+    }
+    return result;
   }
   return { ok: typeof producerHandle.stop === 'function' };
 }

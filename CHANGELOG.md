@@ -13,6 +13,9 @@
 - Added worker pending-delivery outbox retry so signed score or abstain deliveries are replayed after Redis/queue interruptions before idempotency is finalized.
 - Added explicit BullMQ job lock sizing with validation against fetch plus ML timeout budgets.
 - Added scope disclosure to Campaign Postcard v1 artifacts and kept test-payload postcards confined to demo mode.
+- Added the Canary 03 preflight evidence gate (`npm run pilot:canary03-gate`) validating deployment artifact, profile constants, manifest consistency, operator env safety, `.gitignore` patterns, and optional fixture smoke-test report.
+- Made `/healthz` producer readiness fail when `producerStatus.lastScanError` is set, surfacing silent scan failures with an explicit `reason` field; previously `producer.ok=true` while RPC was down.
+- Added `docs/CANARY_03_RESULTS.md` template for capturing Canary 03 run evidence.
 
 ### Earlier Unreleased Fixes
 

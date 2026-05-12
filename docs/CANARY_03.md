@@ -41,6 +41,14 @@ npm run roadmap:check
 git diff --check
 ```
 
+Before deployment, run the evidence gate to confirm preparation artifacts pass all local checks:
+
+```bash
+npm run pilot:canary03-gate -- --deployment=deployments/base-sepolia.json --canary-envs=.venom-canary-03
+```
+
+Record run evidence in `docs/CANARY_03_RESULTS.md`; leave live-only fields as `TBD` until deployment artifacts, transaction hashes, and smoke-test reports exist.
+
 Run the canary readiness harness in fixture mode before any live-testnet attempt.
 
 ```bash

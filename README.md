@@ -10,7 +10,7 @@ The codebase has been through internal review rounds and has regression test cov
 
 Key economic parameters:
 
-- `VenomRegistry.MIN_STAKE` is 1 ETH (testnet).
+- `VenomRegistry.MIN_STAKE` is set in the registry constructor per deployment. Canary 03 uses the `canary-03` profile with `MIN_STAKE=0.25 ETH`; the historical solo default was 1 ETH. See `scripts/pilot/profiles.js` for the canonical canary profile constants.
 - `VenomRegistry.SLASH_PERCENT` is 5%.
 - `PilotEscrow.fundCampaign()` records the funder as the campaign recipient, so `closeCampaign()` returns the bounty to that address. Operator bounty payouts are not yet implemented.
 - Oracle unstaking is implemented with a 7-day cooldown; slashed stake is tracked in `slashedStakeReserve` and can be withdrawn by the registry owner only after a 48h withdrawal timelock.

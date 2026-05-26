@@ -1,10 +1,11 @@
 # VENOM Canary 01 — Results Report
 
-**Status:** validation phase complete; oracle in 7-day unstake cooldown.
+**Status:** validation phase complete; stake recovered on 2026-05-26; canary archived.
 **Network:** Base Sepolia (chainId 84532).
 **Run dates:** 2026-05-06 to 2026-05-07.
-**Operator wallet:** Canary 01 (`0x928…2F51`), funded with 1.0 ETH testnet ETH.
-**Contracts deployed:** `VenomRegistry` at `0x569…223aCb`, `PilotEscrow` at `0x847…2546c` (Sourcify-verified).
+**Recovery date:** 2026-05-26 (finalizeUnstake tx `0x38b20025a7ee4043273aed4bf3f1cd78be62cb33c1e41d66babd7414ed60e315`).
+**Operator wallet:** Canary 01 (`0x92846032a39602cbaa6b8bb653ba56c0641e2f51`), funded with 1.0 ETH testnet ETH.
+**Contracts deployed:** `VenomRegistry` at `0x569cba7636ef094c58d72d0a0fb5d61caa223acb`, `PilotEscrow` at `0x8478df94027bab4fdcb355e6cf7d3ba91482546c` (Sourcify-verified).
 
 This document records what Canary 01 validated, what it deliberately did not validate, what it cost, and what should be filed against main as a result. It is intended as institutional memory and as evidence for the next-stage pilot.
 
@@ -81,8 +82,8 @@ The contract logic itself — quorum check, signature recovery, EIP-712 domain s
 
 | Contract | Address | Verification |
 |---|---|---|
-| `VenomRegistry` | `0x569…223aCb` | Sourcify (Etherscan V1 deprecated, Sourcify confirmed) |
-| `PilotEscrow` | `0x847…2546c` | Sourcify |
+| `VenomRegistry` | `0x569cba7636ef094c58d72d0a0fb5d61caa223acb` | Sourcify (Etherscan V1 deprecated, Sourcify confirmed) |
+| `PilotEscrow` | `0x8478df94027bab4fdcb355e6cf7d3ba91482546c` | Sourcify |
 | Deploy script | `scripts/deploy_phase4.js` (canary checkout) | — |
 | Bind tx confirmations | 3 (after fix) | — |
 
@@ -109,7 +110,7 @@ This is the first observed instance of the on-chain `contentHash` integrity chec
 
 ### 4.3 Unstake initiation
 
-`requestUnstake()` submitted on Base Sepolia, tx `0x5d…617ede4`, status 1. Oracle becomes inactive immediately on this call; the 0.05 ETH stake is locked for 7 days, after which `finalizeUnstake()` will release it back to Canary 01 if no slashing has occurred during the cooldown (none expected — oracle is inactive and not signing anything).
+`requestUnstake()` submitted on Base Sepolia, tx `0x5d52431693136aea0325784bdf10e4ee9397514db3bef30f035a91ec1617ede4`, status 1. Oracle becomes inactive immediately on this call; the 0.05 ETH stake is locked for 7 days, after which `finalizeUnstake()` will release it back to Canary 01 if no slashing has occurred during the cooldown (none expected — oracle is inactive and not signing anything).
 
 ---
 
@@ -163,33 +164,18 @@ The 1% insurance pool fee on each cancellation accumulates to a small balance he
 
 ---
 
-## 7. Current state of Canary 01
+## 7. Current state of Canary 01 (final — post-recovery)
 
-As of report generation:
+**Recovery completed:** 2026-05-26  
+**finalizeUnstake tx:** `0x38b20025a7ee4043273aed4bf3f1cd78be62cb33c1e41d66babd7414ed60e315` (block 42019163, status 1, gas 69,785)
 
-- Oracle status: **inactive** (deactivated at `requestUnstake()`, tx `0x5d…617ede4`)
-- Stake status: **0.05 ETH locked in registry**, releasable via `finalizeUnstake()` after 7-day cooldown
-- Wallet free balance: **~0.95 ETH** (Base Sepolia testnet)
-- Open campaigns: **none** (all cycles either closed or cancelled)
-- Container status: still running, not actively signing (oracle is inactive — no campaigns will be picked up)
+- Oracle status: **inactive** (deactivated at `requestUnstake()`, tx `0x5d52431693136aea0325784bdf10e4ee9397514db3bef30f035a91ec1617ede4`)
+- Stake status: **0.05 ETH recovered** (UnstakeFinalized event emitted)
+- Wallet free balance: **~1.00 ETH** (Base Sepolia testnet)
+- Open campaigns: **none**
+- Container status: shut down; canary checkout archived as `venom-node-canary-v01-archived`
 
-### 7.1 Remaining operational steps
-
-```yaml
-within_7_days:
-  - file 12 MAIN-FIX issues as PRs against main repo (already verified applied to main, may want to ship as one squashed commit with this report as rationale)
-  - update .github/workflows/ci.yml and cist.yml (node-version: 20 -> 22) — these were excluded from the consolidation by .dockerignore
-  - apply the 12 backports as PR(s) against the public repo, with this report as the commit/PR body rationale
-
-at_or_after_day_7:
-  - cast send <VenomRegistry> "finalizeUnstake()"
-  - sweep wallet (optional)
-  - docker compose down on canary checkout
-  - discard Canary 01 credentials from password manager
-  - rename canary directory to venom-node-canary-v01-archived (prevent accidental reuse)
-```
-
-No further canary engagement is required for validation. The system has been observed; the bugs have been filed and fixed; the operator-experience landscape is documented.
+All operational steps completed. The canary has been fully decommissioned. No further engagement required. The system was observed end-to-end; 12 bugs identified and fixed in main; full economic close-loop + integrity defense validated on real testnet. Ready for multi-oracle Canary 02.
 
 ---
 
@@ -267,7 +253,7 @@ In the canary checkout (`venom-node-canary`):
 ### 9.3 Reference links
 
 - Project repository: `realVenomNetwork/venom-node`
-- Contract verification (Sourcify): https://sourcify.dev/#/lookup/0x569…223aCb and https://sourcify.dev/#/lookup/0x847…2546c
+- Contract verification (Sourcify): https://sourcify.dev/#/lookup/0x569cba7636ef094c58d72d0a0fb5d61caa223acb and https://sourcify.dev/#/lookup/0x8478df94027bab4fdcb355e6cf7d3ba91482546c
 - Base Sepolia explorer: https://sepolia.basescan.org/
 - Backport tracking: `docs/CANARY_BACKPORT_TRACKING.md` (canary checkout)
 - Canary operator notes: `docs/CANARY_1ETH.md`
@@ -285,4 +271,4 @@ In the canary checkout (`venom-node-canary`):
 
 ---
 
-*Document version 1.0 — generated 2026-05-07. Subsequent revisions should append a changelog at the bottom of this section.*
+*Document version 1.1 — 2026-05-26: Recovery finalized (finalizeUnstake executed, stake recovered, canary archived). All operational steps complete.*

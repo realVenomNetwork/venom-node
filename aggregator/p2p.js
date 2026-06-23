@@ -6,6 +6,8 @@ const net = require('node:net');
 const { loadOrCreatePeerPrivateKey } = require('./peer-keystore');
 const { generatePostcardFromCloseReceipt } = require('../src/postcard');
 const { recordDashboardEvent } = require('../src/dashboard/quorum-replay');
+const { updateP2PMeshPeers, recordCloseSubmission } = require('../src/observability/metrics');
+const logger = require('../src/observability/logger');
 
 let REQUIRED_ORACLES = 5;
 let SCORE_QUORUM_PCT = 50;
@@ -19,6 +21,11 @@ const MAX_MESSAGE_AGE_MS = Number(process.env.P2P_MAX_MESSAGE_AGE_MS || 5 * 60 *
 const MAX_MESSAGES_PER_WINDOW = Number(process.env.P2P_MAX_MESSAGES_PER_WINDOW || 100);
 const RATE_WINDOW_MS = Number(process.env.P2P_RATE_WINDOW_MS || 10000);
 const CLOSE_CONFIRMATIONS = Number(process.env.CLOSE_CONFIRMATIONS || 3);
+const P2P_GOSSIP_D = Number(process.env.P2P_GOSSIP_D || 6);
+const P2P_GOSSIP_DLO = Number(process.env.P2P_GOSSIP_DLO || 3);
+const P2P_GOSSIP_DHI = Number(process.env.P2P_GOSSIP_DHI || 8);
+const P2P_GOSSIP_DLAZY = Number(process.env.P2P_GOSSIP_DLAZY || 4);
+const P2P_GOSSIP_FACTOR = Number(process.env.P2P_GOSSIP_FACTOR || 0.5);
 
 let libp2p;
 let libp2pModules;
@@ -160,14 +167,14 @@ async function loadQuorumConstants(options = {}) {
     SCORE_QUORUM_PCT = Number(scoreQuorum);
     PARTICIPATION_FLOOR_PCT = Number(participationFloor);
     quorumConstantsLoaded = true;
-    console.log(`[P2P] Loaded quorum constants from contract: REQUIRED_ORACLES=${REQUIRED_ORACLES}, SCORE_QUORUM_PCT=${SCORE_QUORUM_PCT}, PARTICIPATION_FLOOR_PCT=${PARTICIPATION_FLOOR_PCT}`);
+    logger.info(`[P2P] Loaded quorum constants from contract: REQUIRED_ORACLES=${REQUIRED_ORACLES}, SCORE_QUORUM_PCT=${SCORE_QUORUM_PCT}, PARTICIPATION_FLOOR_PCT=${PARTICIPATION_FLOOR_PCT}`);
     return true;
   } catch (err) {
     const message = `[P2P] Failed to load quorum constants from contract: ${err.message}`;
     if (required || !quorumConstantsLoaded) {
       throw new Error(`${message}. Refusing to continue with default quorum constants.`);
     }
-    console.warn(`${message}. Keeping last loaded values: REQUIRED_ORACLES=${REQUIRED_ORACLES}, SCORE_QUORUM_PCT=${SCORE_QUORUM_PCT}, PARTICIPATION_FLOOR_PCT=${PARTICIPATION_FLOOR_PCT}`);
+    logger.warn(`${message}. Keeping last loaded values: REQUIRED_ORACLES=${REQUIRED_ORACLES}, SCORE_QUORUM_PCT=${SCORE_QUORUM_PCT}, PARTICIPATION_FLOOR_PCT=${PARTICIPATION_FLOOR_PCT}`);
     return false;
   }
 }
@@ -227,11 +234,11 @@ async function startP2PNode(wallet) {
       pubsub: gossipsub({
         allowPublishToZeroPeers: true,
         emitSelf: true,
-        D: 2,
-        Dlo: 1,
-        Dhi: 4,
-        Dlazy: 2,
-        gossipFactor: 0.25
+        D: P2P_GOSSIP_D,
+        Dlo: P2P_GOSSIP_DLO,
+        Dhi: P2P_GOSSIP_DHI,
+        Dlazy: P2P_GOSSIP_DLAZY,
+        gossipFactor: P2P_GOSSIP_FACTOR
       })
     }
   };
@@ -241,7 +248,18 @@ async function startP2PNode(wallet) {
   libp2p = await createLibp2p(libp2pConfig);
 
   myPeerId = libp2p.peerId.toString();
-  console.log(`VENOM P2P node started: ${myPeerId}`);
+  logger.info(`VENOM P2P node started: ${myPeerId}`);
+
+  libp2p.addEventListener('peer:connect', (evt) => {
+    const remotePeer = evt.detail;
+    const meshPeers = typeof libp2p.services.pubsub.getMeshPeers === 'function'
+      ? libp2p.services.pubsub.getMeshPeers(TOPIC).length
+      : 'N/A';
+    const subs = typeof libp2p.services.pubsub.getSubscribers === 'function'
+      ? libp2p.services.pubsub.getSubscribers(TOPIC).length
+      : 'N/A';
+    logger.info(`[P2P] Peer connected: ${remotePeer}, meshPeers=${meshPeers}, subscribers=${subs}`);
+  });
 
   for (let index = 0; index < multiaddrs.length; index++) {
     if (process.env.VENOM_SKIP_REGISTRY_DIAL === 'true') continue;
@@ -250,15 +268,27 @@ async function startP2PNode(wallet) {
     if (addr && addr.length > 0) {
       try {
         await libp2p.dial(multiaddr(addr));
-        console.log(`[P2P] Connected to on-chain peer: ${addr}`);
+        logger.info(`[P2P] Connected to on-chain peer: ${addr}`);
       } catch {
-        console.warn(`[P2P] Failed to dial ${addr}`);
+        logger.warn(`[P2P] Failed to dial ${addr}`);
       }
     }
   }
 
   await libp2p.services.pubsub.subscribe(TOPIC);
   libp2p.services.pubsub.addEventListener('message', handleSignatureMessage);
+
+  setTimeout(async () => {
+    if (!libp2p) return;
+    const meshPeers = typeof libp2p.services.pubsub.getMeshPeers === 'function'
+      ? libp2p.services.pubsub.getMeshPeers(TOPIC).length
+      : 0;
+    logger.info(`[P2P] Mesh check after subscribe: meshPeers=${meshPeers}, REQUIRED_ORACLES=${REQUIRED_ORACLES}`);
+    if (meshPeers < REQUIRED_ORACLES) {
+      logger.info(`[P2P] Mesh below REQUIRED_ORACLES, re-dialing active oracles...`);
+      await refreshActiveOracles();
+    }
+  }, 10000);
 
   const bootstrapPeers = (process.env.P2P_BOOTSTRAP_PEERS || '')
     .split(',')
@@ -267,21 +297,21 @@ async function startP2PNode(wallet) {
   for (const peer of bootstrapPeers) {
     const addr = bootstrapPeerMultiaddr(peer);
     if (!addr) {
-      console.warn(`[P2P] Skipping malformed bootstrap peer: ${peer}`);
+      logger.warn(`[P2P] Skipping malformed bootstrap peer: ${peer}`);
       continue;
     }
     for (let attempt = 1; attempt <= 5; attempt++) {
       try {
         await libp2p.dial(multiaddr(addr));
-        console.log(`[P2P] Bootstrap dialed ${peer}`);
+        logger.info(`[P2P] Bootstrap dialed ${peer}`);
         break;
       } catch (err) {
         if (attempt < 5) {
           const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
-          console.warn(`[P2P] Bootstrap dial ${peer} failed (attempt ${attempt}/5), retry in ${delay}ms: ${err.message}`);
+          logger.warn(`[P2P] Bootstrap dial ${peer} failed (attempt ${attempt}/5), retry in ${delay}ms: ${err.message}`);
           await new Promise(r => setTimeout(r, delay));
         } else {
-          console.warn(`[P2P] Bootstrap dial ${peer} failed after 5 attempts: ${err.message}`);
+          logger.warn(`[P2P] Bootstrap dial ${peer} failed after 5 attempts: ${err.message}`);
         }
       }
     }
@@ -297,12 +327,12 @@ async function startP2PNode(wallet) {
       try { await stream.close(); } catch {}
     }
   });
-  console.log('[P2P] Relay handler registered');
+  logger.info('[P2P] Relay handler registered');
 
   leaderInterval = setInterval(checkAndSubmitIfLeader, 5000);
   oracleRefreshInterval = setInterval(() => {
     refreshActiveOracles().catch((error) => {
-      console.warn(`[P2P] Active oracle refresh failed: ${error.message}`);
+      logger.warn(`[P2P] Active oracle refresh failed: ${error.message}`);
     });
   }, Number(process.env.P2P_ORACLE_REFRESH_MS || 60000));
   pendingCampaignGcInterval = setInterval(prunePendingCampaigns, PENDING_CAMPAIGN_GC_MS);
@@ -325,16 +355,18 @@ async function startP2PNode(wallet) {
     myPeerId = null;
   };
 
-  // Diagnostic: periodic peer connection status
   const diagInterval = setInterval(() => {
     if (!libp2p) { clearInterval(diagInterval); return; }
     const conns = libp2p.getConnections ? libp2p.getConnections().length : 'N/A';
+    const meshPeers = typeof libp2p.services.pubsub.getMeshPeers === 'function'
+      ? libp2p.services.pubsub.getMeshPeers(TOPIC).length : 0;
     const subs = typeof libp2p.services.pubsub.getSubscribers === 'function'
       ? libp2p.services.pubsub.getSubscribers(TOPIC).length : 'N/A';
-    console.log(`[P2P] Diag: connections=${conns} subscribers=${subs}`);
+    if (typeof meshPeers === 'number') updateP2PMeshPeers(meshPeers);
+    logger.info(`[P2P] Diag: connections=${conns} meshPeers=${meshPeers} subscribers=${subs}`);
   }, 60_000);
 
-  console.log("[P2P] Node ready (v1.1 signed abstention + closeCampaign ABI)");
+  logger.info("[P2P] Node ready (v1.1 signed abstention + closeCampaign ABI)");
   return libp2p;
 }
 
@@ -360,7 +392,7 @@ async function ensurePeersConnected(multiaddrs, operators = []) {
   const targetMultiaddrs = normalizeIterable(multiaddrs);
   if (!targetMultiaddrs) {
     if (!warnedMissingOracleList) {
-      console.log("[P2P] Active oracle multiaddr list unavailable; skipping peer reconnect");
+      logger.info("[P2P] Active oracle multiaddr list unavailable; skipping peer reconnect");
       warnedMissingOracleList = true;
     }
     return;
@@ -373,7 +405,7 @@ async function ensurePeersConnected(multiaddrs, operators = []) {
         ? Array.from(libp2p.connections.values())
         : []);
   if (connections.length === 0 && !libp2p.getConnections && !libp2p.connections && !warnedMissingConnectionApi) {
-    console.log("[P2P] libp2p connection list unavailable; peer reconnect will dial configured oracle multiaddrs");
+    logger.info("[P2P] libp2p connection list unavailable; peer reconnect will dial configured oracle multiaddrs");
     warnedMissingConnectionApi = true;
   }
 
@@ -392,9 +424,9 @@ async function ensurePeersConnected(multiaddrs, operators = []) {
     if (addr && addr.length > 0 && !connectedAddrs.has(addr)) {
       try {
         await libp2p.dial(multiaddr(addr));
-        console.log(`[P2P] Re-connected to peer: ${addr}`);
+        logger.info(`[P2P] Re-connected to peer: ${addr}`);
       } catch (err) {
-        console.warn(`[P2P] Failed to re-dial ${addr}: ${err.message}`);
+        logger.warn(`[P2P] Failed to re-dial ${addr}: ${err.message}`);
       }
     }
   }
@@ -407,7 +439,7 @@ async function refreshActiveOracles() {
   const multiaddrs = normalizeIterable(multiaddrResult);
   if (!operators) {
     if (!warnedMissingOracleList) {
-      console.log("[P2P] Active oracle list unavailable; keeping previous active oracle cache");
+      logger.info("[P2P] Active oracle list unavailable; keeping previous active oracle cache");
       warnedMissingOracleList = true;
     }
     await loadQuorumConstants();
@@ -415,7 +447,7 @@ async function refreshActiveOracles() {
   }
   activeOracleCount = Math.max(operators.length, 1);
   activeOracleAddresses = new Set(operators.map((operator) => operator.toLowerCase()));
-  console.log(`[P2P] Found ${operators.length} active oracles on-chain`);
+  logger.info(`[P2P] Found ${operators.length} active oracles on-chain`);
 
   await ensurePeersConnected(multiaddrs, operators);
   await loadQuorumConstants();
@@ -560,19 +592,19 @@ async function handleSignatureMessage(evt) {
     const peerId = data.peerId || 'unknown';
 
     if (!ethers.isHexString(campaignUid, 32) || typeof signature !== "string") {
-      console.warn("[P2P] Dropping malformed gossip message");
+      logger.warn("[P2P] Dropping malformed gossip message");
       return;
     }
 
     if (isRateLimited(peerId)) {
-      console.warn(`[P2P] Rate limited peer ${peerId}`);
+      logger.warn(`[P2P] Rate limited peer ${peerId}`);
       return;
     }
 
     if (data.timestamp && typeof data.timestamp === 'number') {
       const age = Date.now() - data.timestamp;
       if (age > MAX_MESSAGE_AGE_MS) {
-        console.warn(`[P2P] Dropping stale message for ${campaignUid} from ${peerId}`);
+        logger.warn(`[P2P] Dropping stale message for ${campaignUid} from ${peerId}`);
         return;
       }
     }
@@ -584,21 +616,21 @@ async function handleSignatureMessage(evt) {
     if (type === 'abstain') {
       reasonCode = normalizeAbstainReason(data.reasonCode ?? reason);
       if (reasonCode === null) {
-        console.warn(`[P2P] Dropping abstain with invalid reason for ${campaignUid}`);
+        logger.warn(`[P2P] Dropping abstain with invalid reason for ${campaignUid}`);
         return;
       }
       signer = recoverAbstainSigner(campaignUid, reasonCode, signature).toLowerCase();
     } else {
       scoreNumber = Number(score);
       if (!Number.isInteger(scoreNumber) || scoreNumber < 0 || scoreNumber > 100) {
-        console.warn(`[P2P] Dropping score outside supported range for ${campaignUid}`);
+        logger.warn(`[P2P] Dropping score outside supported range for ${campaignUid}`);
         return;
       }
       signer = recoverScoreSigner(campaignUid, scoreNumber, signature).toLowerCase();
     }
 
     if (!activeOracleAddresses.has(signer)) {
-      console.warn(`[P2P] Dropping ${type} from inactive signer ${signer}`);
+      logger.warn(`[P2P] Dropping ${type} from inactive signer ${signer}`);
       return;
     }
 
@@ -621,9 +653,9 @@ async function handleSignatureMessage(evt) {
         reasonCode,
         message: "Abstain signature observed by this node."
       }).catch((error) => {
-        console.warn(`[Dashboard] Failed to record abstain observation: ${error.message}`);
+        logger.warn(`[Dashboard] Failed to record abstain observation: ${error.message}`);
       });
-      console.log(`[P2P] Received ABSTAIN for ${campaignUid} (${entry.abstainSigners.length} abstains)`);
+      logger.info(`[P2P] Received ABSTAIN for ${campaignUid} (${entry.abstainSigners.length} abstains)`);
     } else {
       if (entry.signers.includes(signer)) return;
       entry.scores.push(scoreNumber);
@@ -637,9 +669,9 @@ async function handleSignatureMessage(evt) {
         score: scoreNumber,
         message: "Score signature observed by this node."
       }).catch((error) => {
-        console.warn(`[Dashboard] Failed to record score observation: ${error.message}`);
+        logger.warn(`[Dashboard] Failed to record score observation: ${error.message}`);
       });
-      console.log(`[P2P] Received SCORE for ${campaignUid} (${entry.signers.length}/${REQUIRED_ORACLES})`);
+      logger.info(`[P2P] Received SCORE for ${campaignUid} (${entry.signers.length}/${REQUIRED_ORACLES})`);
     }
 
     entry.updatedAt = Date.now();
@@ -652,9 +684,9 @@ async function handleSignatureMessage(evt) {
           source: "p2p",
           message: "This node observed enough local peer messages to mark quorum reached."
         }).catch((error) => {
-          console.warn(`[Dashboard] Failed to record quorum observation: ${error.message}`);
+          logger.warn(`[Dashboard] Failed to record quorum observation: ${error.message}`);
         });
-        console.log(`[P2P] Quorum reached for ${campaignUid} (round 0 leader: ${leaderForRound(campaignUid, entry.signers, 0)})`);
+        logger.info(`[P2P] Quorum reached for ${campaignUid} (round 0 leader: ${leaderForRound(campaignUid, entry.signers, 0)})`);
       }
 
       if (amILeader(campaignUid, entry.signers, 0)) {
@@ -663,7 +695,7 @@ async function handleSignatureMessage(evt) {
       }
     }
   } catch (err) {
-    console.error("[P2P] Error handling message:", err.message);
+    logger.error("[P2P] Error handling message:", err.message);
   }
 }
 
@@ -676,7 +708,7 @@ async function submitAggregatedTransaction(campaignUid, entry) {
       return true;
     }
 
-    console.log(`[P2P] Submitting closeCampaign for ${campaignUid} with ${entry.signers.length} scores + ${entry.abstainSigners.length} abstains...`);
+    logger.info(`[P2P] Submitting closeCampaign for ${campaignUid} with ${entry.signers.length} scores + ${entry.abstainSigners.length} abstains...`);
     recordDashboardEvent({
       type: "close_submitted",
       campaignUid,
@@ -684,7 +716,7 @@ async function submitAggregatedTransaction(campaignUid, entry) {
       submitter: myWallet.address,
       message: "This node submitted closeCampaign."
     }).catch((error) => {
-      console.warn(`[Dashboard] Failed to record close submission: ${error.message}`);
+      logger.warn(`[Dashboard] Failed to record close submission: ${error.message}`);
     });
 
     const pilotEscrow = new ethers.Contract(pilotEscrowAddress, [
@@ -711,7 +743,8 @@ async function submitAggregatedTransaction(campaignUid, entry) {
     if (!campaign.closed && campaign[2] !== true) {
       throw new Error("closeCampaign receipt observed, but campaign is not closed on-chain");
     }
-    console.log(`SUCCESS: Campaign closed in block ${receipt.blockNumber}`);
+    logger.info(`SUCCESS: Campaign closed in block ${receipt.blockNumber}`);
+    recordCloseSubmission('success');
     markCampaignLocallyClosed(campaignUid);
     recordDashboardEvent({
       type: "close_observed",
@@ -722,7 +755,7 @@ async function submitAggregatedTransaction(campaignUid, entry) {
       blockNumber: Number(receipt.blockNumber),
       message: "This node observed closeCampaign succeed on-chain."
     }).catch((error) => {
-      console.warn(`[Dashboard] Failed to record close observation: ${error.message}`);
+      logger.warn(`[Dashboard] Failed to record close observation: ${error.message}`);
     });
     try {
       const postcardResult = await generatePostcardFromCloseReceipt({
@@ -750,13 +783,14 @@ async function submitAggregatedTransaction(campaignUid, entry) {
         postcardPaths: postcardResult.paths,
         message: "Campaign Postcard v1 was written locally."
       });
-      console.log(`[P2P] Wrote Campaign Postcard v1 for ${campaignUid}`);
+      logger.info(`[P2P] Wrote Campaign Postcard v1 for ${campaignUid}`);
     } catch (postcardError) {
-      console.warn(`[P2P] Campaign closed, but postcard was not written: ${postcardError.message}`);
+      logger.warn(`[P2P] Campaign closed, but postcard was not written: ${postcardError.message}`);
     }
     return true;
   } catch (err) {
-    console.error(`Submission failed for ${campaignUid}:`, err.message);
+    logger.error(`Submission failed for ${campaignUid}:`, err.message);
+    recordCloseSubmission('failed');
     locallyClosedCampaigns.delete(campaignUid.toLowerCase());
     return isAlreadyClosedError(err);
   }
@@ -774,7 +808,7 @@ async function publishSignature(campaignUid, score, signature) {
     timestamp: Date.now()
   };
   await libp2p.services.pubsub.publish(TOPIC, new TextEncoder().encode(JSON.stringify(message)));
-  relayToPeers(message).catch(err => console.warn(`[P2P-Relay] Relay error: ${err.message}`));
+  relayToPeers(message).catch(err => logger.warn(`[P2P-Relay] Relay error: ${err.message}`));
 }
 
 async function relayToPeers(message) {
@@ -790,7 +824,7 @@ async function relayToPeers(message) {
       await stream.sink([encoded]);
       await stream.close();
     } catch (err) {
-      console.warn(`[P2P-Relay] Failed to relay to ${peerId}: ${err.message}`);
+      logger.warn(`[P2P-Relay] Failed to relay to ${peerId}: ${err.message}`);
     }
   }
 }
@@ -809,7 +843,7 @@ async function publishAbstain(campaignUid, reasonCode, signature, reasonLabel = 
     timestamp: Date.now()
   };
   await libp2p.services.pubsub.publish(TOPIC, new TextEncoder().encode(JSON.stringify(message)));
-  relayToPeers(message).catch(err => console.warn(`[P2P-Relay] Relay error: ${err.message}`));
+  relayToPeers(message).catch(err => logger.warn(`[P2P-Relay] Relay error: ${err.message}`));
 }
 
 async function checkAndSubmitIfLeader() {
@@ -834,7 +868,7 @@ async function checkAndSubmitIfLeader() {
     const currentLeader = leaderForRound(campaignUid, signerPool, round);
     if (currentLeader !== myAddress) continue;
 
-    console.log(`[P2P] Fallback leader round ${round} for ${campaignUid}`);
+    logger.info(`[P2P] Fallback leader round ${round} for ${campaignUid}`);
     const submitted = await submitAggregatedTransaction(campaignUid, entry);
     if (submitted) pendingCampaigns.delete(campaignUid);
   }

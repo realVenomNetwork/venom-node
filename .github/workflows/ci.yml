@@ -39,8 +39,14 @@ jobs:
       - name: Compile contracts
         run: npm run compile
 
+      - name: Solidity lint
+        run: npm run lint:sol
+
       - name: Check JavaScript syntax
         run: npm run lint:js
+
+      - name: ESLint with security rules
+        run: npm run lint:eslint
 
       - name: Check roadmap guardrails
         run: npm run roadmap:check
@@ -59,6 +65,11 @@ jobs:
 
       - name: Audit prompt fixtures
         run: python eval_engine/tools/audit_prompt_integrity.py
+
+      - name: Python ML service tests
+        run: |
+          pip install -r ml_service/requirements.txt
+          cd ml_service && python -m pytest tests/
 
       - name: Production dependency audit
         run: npm run audit:prod

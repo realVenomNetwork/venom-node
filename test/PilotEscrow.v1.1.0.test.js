@@ -12,8 +12,13 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
         const Registry = await ethers.getContractFactory("VenomRegistry");
         registry = await Registry.deploy(...REGISTRY_ARGS);
 
+        const ConsentManager = await ethers.getContractFactory("ConsentManager");
+        const TitheManager = await ethers.getContractFactory("TitheManager");
+        const consentManager = await ConsentManager.deploy();
+        const titheManager = await TitheManager.deploy();
+
         const Escrow = await ethers.getContractFactory("PilotEscrow");
-        escrow = await Escrow.deploy(await registry.getAddress(), ...ESCROW_ARGS);
+        escrow = await Escrow.deploy(await registry.getAddress(), await consentManager.getAddress(), await titheManager.getAddress(), ...ESCROW_ARGS);
         await registry.setPilotEscrow(await escrow.getAddress());
 
         // Register 10 active oracles for clean percentage math
@@ -221,8 +226,12 @@ describe("PilotEscrow v1.1.0-rc.1 — Quorum & Cancellation", function () {
     });
 
     it("9. EIP-712 abstain replay across deployments fails", async function () {
+        const ConsentManager = await ethers.getContractFactory("ConsentManager");
+        const TitheManager = await ethers.getContractFactory("TitheManager");
+        const consentB = await ConsentManager.deploy();
+        const titheB = await TitheManager.deploy();
         const Escrow = await ethers.getContractFactory("PilotEscrow");
-        const escrowB = await Escrow.deploy(await registry.getAddress(), ...ESCROW_ARGS);
+        const escrowB = await Escrow.deploy(await registry.getAddress(), await consentB.getAddress(), await titheB.getAddress(), ...ESCROW_ARGS);
 
         const uid = ethers.id("R1");
         await escrowB.connect(owner).fundCampaign(uid, "ipfs://test", ethers.id("test"), { value: ethers.parseEther("1.0") });

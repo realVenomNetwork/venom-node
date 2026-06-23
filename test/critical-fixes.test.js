@@ -8,6 +8,14 @@ const {
 } = require("../src/config/runtime-mode");
 const { isPrivateOrWildcardMultiaddr } = require("../src/utils/multiaddr");
 
+async function deployGovernance() {
+    const ConsentManager = await ethers.getContractFactory("ConsentManager");
+    const TitheManager = await ethers.getContractFactory("TitheManager");
+    const consent = await ConsentManager.deploy();
+    const tithe = await TitheManager.deploy();
+    return { consent, tithe };
+}
+
 describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
     const REGISTRY_ARGS = [ethers.parseEther("1.0"), 5, 25];
     const ESCROW_ARGS = [5, 50, 67, 7200];
@@ -19,8 +27,13 @@ describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
         const Registry = await ethers.getContractFactory("VenomRegistry");
         registry = await Registry.deploy(...REGISTRY_ARGS);
 
+        const ConsentManager = await ethers.getContractFactory("ConsentManager");
+        const TitheManager = await ethers.getContractFactory("TitheManager");
+        const consentManager = await ConsentManager.deploy();
+        const titheManager = await TitheManager.deploy();
+
         const Escrow = await ethers.getContractFactory("PilotEscrow");
-        escrow = await Escrow.deploy(await registry.getAddress(), ...ESCROW_ARGS);
+        escrow = await Escrow.deploy(await registry.getAddress(), await consentManager.getAddress(), await titheManager.getAddress(), ...ESCROW_ARGS);
         await registry.setPilotEscrow(await escrow.getAddress());
     });
 
@@ -136,9 +149,10 @@ describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
         it("sets PilotEscrow immediately on first call", async function () {
             const Registry2 = await ethers.getContractFactory("VenomRegistry");
             const registry2 = await Registry2.deploy(...REGISTRY_ARGS);
+            const gov2 = await deployGovernance();
 
             const Escrow2 = await ethers.getContractFactory("PilotEscrow");
-            const escrow2 = await Escrow2.deploy(await registry2.getAddress(), ...ESCROW_ARGS);
+            const escrow2 = await Escrow2.deploy(await registry2.getAddress(), await gov2.consent.getAddress(), await gov2.tithe.getAddress(), ...ESCROW_ARGS);
 
             expect(await registry2.pilotEscrow()).to.equal(ethers.ZeroAddress);
 
@@ -147,8 +161,9 @@ describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
         });
 
         it("schedules upgrade with 48h timelock on subsequent calls", async function () {
+            const gov2 = await deployGovernance();
             const Escrow2 = await ethers.getContractFactory("PilotEscrow");
-            const escrow2 = await Escrow2.deploy(await registry.getAddress(), ...ESCROW_ARGS);
+            const escrow2 = await Escrow2.deploy(await registry.getAddress(), await gov2.consent.getAddress(), await gov2.tithe.getAddress(), ...ESCROW_ARGS);
 
             const tx = await registry.setPilotEscrow(await escrow2.getAddress());
             const rcpt = await tx.wait();
@@ -163,8 +178,9 @@ describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
         });
 
         it("rejects executePilotEscrowUpgrade before timelock", async function () {
+            const gov2 = await deployGovernance();
             const Escrow2 = await ethers.getContractFactory("PilotEscrow");
-            const escrow2 = await Escrow2.deploy(await registry.getAddress(), ...ESCROW_ARGS);
+            const escrow2 = await Escrow2.deploy(await registry.getAddress(), await gov2.consent.getAddress(), await gov2.tithe.getAddress(), ...ESCROW_ARGS);
 
             await registry.setPilotEscrow(await escrow2.getAddress());
 
@@ -173,8 +189,9 @@ describe("VenomRegistry — Unstake, Slash, and Timelock", function () {
         });
 
         it("executes PilotEscrow upgrade after 48h timelock", async function () {
+            const gov2 = await deployGovernance();
             const Escrow2 = await ethers.getContractFactory("PilotEscrow");
-            const escrow2 = await Escrow2.deploy(await registry.getAddress(), ...ESCROW_ARGS);
+            const escrow2 = await Escrow2.deploy(await registry.getAddress(), await gov2.consent.getAddress(), await gov2.tithe.getAddress(), ...ESCROW_ARGS);
 
             await registry.setPilotEscrow(await escrow2.getAddress());
 

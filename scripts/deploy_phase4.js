@@ -91,10 +91,22 @@ async function main() {
   const venomRegistryTx = venomRegistry.deploymentTransaction();
   console.log("VenomRegistry deployed to:", venomRegistryAddress);
 
-  // 2. Deploy PilotEscrow (passing registry address)
+  // 2. Deploy governance contracts
+  const ConsentManager = await hre.ethers.getContractFactory("ConsentManager");
+  const TitheManager = await hre.ethers.getContractFactory("TitheManager");
+  const consentManager = await ConsentManager.deploy();
+  await consentManager.waitForDeployment();
+  console.log("ConsentManager deployed to:", await consentManager.getAddress());
+  const titheManager = await TitheManager.deploy();
+  await titheManager.waitForDeployment();
+  console.log("TitheManager deployed to:", await titheManager.getAddress());
+
+  // 3. Deploy PilotEscrow (passing registry + governance addresses)
   const PilotEscrow = await hre.ethers.getContractFactory("PilotEscrow");
   const escrowConstructorArguments = [
     venomRegistryAddress,
+    await consentManager.getAddress(),
+    await titheManager.getAddress(),
     profile.requiredOracles,
     profile.scoreQuorumPct,
     profile.participationFloorPct,
@@ -151,6 +163,8 @@ async function main() {
     venomRegistryAddress,
     registryArtifactArguments,
     venomRegistryTxHash: venomRegistryTx ? venomRegistryTx.hash : null,
+    consentManagerAddress: await consentManager.getAddress(),
+    titheManagerAddress: await titheManager.getAddress(),
     pilotEscrowAddress,
     escrowConstructorArguments,
     pilotEscrowTxHash: pilotEscrowTx ? pilotEscrowTx.hash : null,
@@ -167,6 +181,8 @@ async function main() {
   console.log("Deployment artifact written to:", artifactPath);
 
   await maybeVerify(venomRegistryAddress, registryArtifactArguments);
+  await maybeVerify(await consentManager.getAddress(), []);
+  await maybeVerify(await titheManager.getAddress(), []);
   await maybeVerify(pilotEscrowAddress, escrowConstructorArguments);
 
   console.log("\n=== Phase 4 Deployment Complete ===");

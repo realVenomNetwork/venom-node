@@ -2,11 +2,13 @@
 require('dotenv').config({ quiet: true });
 const { ethers } = require('ethers');
 const http = require('http');
+const { initMetrics } = require('./src/observability/metrics');
 const { assertRuntimeModeConfig, describeRuntimeMode } = require('./src/config/runtime-mode');
 const { isPrivateOrWildcardMultiaddr } = require('./src/utils/multiaddr');
 const { closeQueueResources, reconnectRedis } = require('./aggregator/queue');
 const readiness = require('./src/observability/readiness');
 const canaryEvents = require('./src/observability/canary-events');
+const logger = require('./src/observability/logger');
 
 const VERSION = "1.0.1";
 const VENOM_REGISTRY_ADDRESS = process.env.VENOM_REGISTRY_ADDRESS;
@@ -48,7 +50,7 @@ function getOperatorPrivateKey() {
 }
 
 async function shutdown(signal) {
-  console.log(`\n${signal} received, shutting down VENOM Node (HTTP server: ${httpServer ? 'stopping' : 'not running'})...`);
+  logger.info(`\n${signal} received, shutting down VENOM Node (HTTP server: ${httpServer ? 'stopping' : 'not running'})...`);
   let exitCode = 0;
   try {
     if (canaryEventsHandle && typeof canaryEventsHandle.stop === 'function') canaryEventsHandle.stop();
@@ -61,7 +63,7 @@ async function shutdown(signal) {
     await closeQueueResources();
   } catch (error) {
     exitCode = 1;
-    console.error("Shutdown error:", error);
+    logger.error("Shutdown error:", error);
   }
   setTimeout(() => process.exit(exitCode), 100);
 }
@@ -69,7 +71,7 @@ async function shutdown(signal) {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-function startHealthServer({ getDeps, version = VERSION, port, host, logger = console.log } = {}) {
+function startHealthServer({ getDeps, version = VERSION, port, host, log = logger.info.bind(logger) } = {}) {
   const effectivePort = Number(port !== undefined ? port : (process.env.HEALTH_PORT || 3000));
   const effectiveHost = host !== undefined ? host : (process.env.HEALTH_HOST || '127.0.0.1');
 
@@ -122,16 +124,16 @@ function startHealthServer({ getDeps, version = VERSION, port, host, logger = co
 
   server.listen(effectivePort, effectiveHost, () => {
     const boundPort = (server.address() && server.address().port) || effectivePort;
-    logger(`[Health] Server listening on http://${effectiveHost}:${boundPort}`);
+    log(`[Health] Server listening on http://${effectiveHost}:${boundPort}`);
   });
 
   return server;
 }
 
 function warnPrivateMultiaddrOverride(multiaddr) {
-  console.warn("[P2P] VENOM_ALLOW_PRIVATE_MULTIADDR=true: registering a private or non-public multiaddr.");
-  console.warn("[P2P] This is intended only for solo test setups and must not be used for production pilots.");
-  console.warn(`[P2P] Selected non-public multiaddr: ${multiaddr}`);
+  logger.warn("[P2P] VENOM_ALLOW_PRIVATE_MULTIADDR=true: registering a private or non-public multiaddr.");
+  logger.warn("[P2P] This is intended only for solo test setups and must not be used for production pilots.");
+  logger.warn(`[P2P] Selected non-public multiaddr: ${multiaddr}`);
 }
 
 async function main() {
@@ -140,8 +142,8 @@ async function main() {
   const { startProducer } = require('./aggregator/producer');
   const { startWorker } = require('./aggregator/worker');
 
-  console.log(`Starting VENOM Node v${VERSION}...`);
-  console.log(`Runtime guardrails: ${describeRuntimeMode(runtimeModeConfig)}`);
+  logger.info(`Starting VENOM Node v${VERSION}...`);
+  logger.info(`Runtime guardrails: ${describeRuntimeMode(runtimeModeConfig)}`);
 
   const rpcUrls = (process.env.RPC_URLS || process.env.RPC_URL || "https://base-sepolia-rpc.publicnode.com")
     .split(",")
@@ -165,7 +167,7 @@ async function main() {
   let registeredMultiaddr = null;
 
   if (!isRegistered) {
-    console.log("Starting P2P node for registration...");
+    logger.info("Starting P2P node for registration...");
     p2pNode = await startP2PNode(wallet);
 
     const multiaddrs = p2pNode.getMultiaddrs();
@@ -173,7 +175,7 @@ async function main() {
     // Try env override first
     if (process.env.PUBLIC_MULTIADDR) {
       registeredMultiaddr = process.env.PUBLIC_MULTIADDR;
-      console.log(`Using PUBLIC_MULTIADDR from env: ${registeredMultiaddr}`);
+      logger.info(`Using PUBLIC_MULTIADDR from env: ${registeredMultiaddr}`);
       if (ALLOW_PRIVATE_MULTIADDR && isPrivateOrWildcardMultiaddr(registeredMultiaddr)) {
         warnPrivateMultiaddrOverride(registeredMultiaddr);
       }
@@ -196,25 +198,25 @@ async function main() {
       } else {
         const publicMultiaddr = reachable.find(m => m.toString().includes('/tcp/')) || reachable[0];
         registeredMultiaddr = publicMultiaddr.toString();
-        console.log(`Auto-detected public multiaddr: ${registeredMultiaddr}`);
+        logger.info(`Auto-detected public multiaddr: ${registeredMultiaddr}`);
       }
     }
 
-    console.log(`Registering node with multiaddr: ${registeredMultiaddr}`);
+    logger.info(`Registering node with multiaddr: ${registeredMultiaddr}`);
 
     try {
       const tx = await registry.registerOracle(registeredMultiaddr, { value: stakeAmount });
       await tx.wait();
       await refreshActiveOracles();
-      console.log(`Successfully registered with multiaddr: ${registeredMultiaddr}`);
+      logger.info(`Successfully registered with multiaddr: ${registeredMultiaddr}`);
     } catch (err) {
-      console.error("Registration failed, cleaning up P2P node...", err.message);
+      logger.error("Registration failed, cleaning up P2P node...", err.message);
       await p2pNode.stop();
       p2pNode = null;
       throw err;
     }
   } else {
-    console.log("Already registered");
+    logger.info("Already registered");
     if (!p2pNode) {
       p2pNode = await startP2PNode(wallet);
     }
@@ -223,11 +225,11 @@ async function main() {
   // Give gossipsub mesh time to converge before workers publish signatures
   await new Promise(r => setTimeout(r, 15000));
 
-  console.log("\nStarting Producer, Worker, and P2P mesh...");
+  logger.info("\nStarting Producer, Worker, and P2P mesh...");
   producerHandle = await startProducer();
   workerHandle = await startWorker();
 
-  console.log(`\nVENOM Node v${VERSION} is fully operational.`);
+  logger.info(`\nVENOM Node v${VERSION} is fully operational.`);
 }
 
 if (require.main === module) {
@@ -244,11 +246,12 @@ if (require.main === module) {
       queueModule,
     });
     httpServer = startHealthServer({ getDeps, version: VERSION });
+    const metricsHandle = initMetrics();
     canaryEventsHandle = canaryEvents.startFromEnv({
       getDeps: () => ({ ...getDeps(), version: VERSION }),
     });
   }).catch((error) => {
-    console.error(error);
+    logger.error(error);
     process.exit(1);
   });
 }

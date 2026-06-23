@@ -1,5 +1,7 @@
 // rpc/router.js
 const { ethers } = require('ethers');
+const { recordRpcFailover } = require('../src/observability/metrics');
+const logger = require('../src/observability/logger');
 
 const HEALTH_CHECK_INTERVAL = 60000;
 const PROVIDER_UNHEALTHY_THRESHOLD = 3;
@@ -40,7 +42,7 @@ class MultiRpcProvider {
 
     this._startHealthChecks();
 
-    console.log(`[MultiRPC] Initialized with ${urls.length} providers`);
+    logger.info(`[MultiRPC] Initialized with ${urls.length} providers`);
   }
 
   async _withTimeout(promise, timeoutMs, message) {
@@ -94,7 +96,7 @@ class MultiRpcProvider {
 
         const latency = Date.now() - startTime;
         if (latency > 5000) {
-          console.warn(`[MultiRPC] Slow response from ${this.urls[this.currentIndex]}: ${latency}ms`);
+          logger.warn(`[MultiRPC] Slow response from ${this.urls[this.currentIndex]}: ${latency}ms`);
         }
 
         return result;
@@ -106,13 +108,14 @@ class MultiRpcProvider {
 
         if (this.providerStatus[this.currentIndex].failures >= PROVIDER_UNHEALTHY_THRESHOLD) {
           this.providerStatus[this.currentIndex].healthy = false;
-          console.warn(`[MultiRPC] Marked ${this.urls[this.currentIndex]} as unhealthy after ${PROVIDER_UNHEALTHY_THRESHOLD} failures`);
+          logger.warn(`[MultiRPC] Marked ${this.urls[this.currentIndex]} as unhealthy after ${PROVIDER_UNHEALTHY_THRESHOLD} failures`);
         }
 
-        console.warn(`[MultiRPC] Attempt ${attempt + 1} failed on ${this.urls[this.currentIndex]}: ${err.message}`);
+        logger.warn(`[MultiRPC] Attempt ${attempt + 1} failed on ${this.urls[this.currentIndex]}: ${err.message}`);
 
         if (this.urls.length > 1) {
           this._getNextUrl();
+          recordRpcFailover();
         }
       }
     }
@@ -144,7 +147,7 @@ class MultiRpcProvider {
       );
       this.providerStatus[index].failures = 0;
       this.providerStatus[index].healthy = true;
-      console.log(`[MultiRPC] Provider ${this.urls[index]} recovered`);
+      logger.info(`[MultiRPC] Provider ${this.urls[index]} recovered`);
     } catch {
       // Still unhealthy
     }

@@ -7,6 +7,14 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "./VenomRegistry.sol";
 
+interface IConsentManager {
+    function getEffectiveRate(address user) external view returns (uint256 rateBps, string memory label);
+}
+
+interface ITitheManager {
+    function distribute(uint256 totalAmount, address mainRecipient) external payable;
+}
+
 /**
  * @title PilotEscrow
  * @notice Stores testnet campaign bounties and closes campaigns after oracle score quorum.
@@ -16,6 +24,8 @@ import "./VenomRegistry.sol";
  */
 contract PilotEscrow is Ownable2Step, Pausable, ReentrancyGuard {
     VenomRegistry public immutable registry;
+    IConsentManager public immutable consentManager;
+    ITitheManager public immutable titheManager;
 
     uint256 private constant MAX_SCORES = 20;
     // === v1.1.0-rc.1 parameters ===
@@ -61,6 +71,10 @@ contract PilotEscrow is Ownable2Step, Pausable, ReentrancyGuard {
     event CampaignFunded(bytes32 indexed campaignUid, address indexed funder, uint256 amount, string contentUri, bytes32 contentHash);
     /// @notice Emitted after quorum, median threshold, and transfer all succeed.
     event CampaignClosed(bytes32 indexed campaignUid, address indexed recipient, uint256 bounty, uint256 medianScore);
+    /// @notice Emitted when a campaign closes and a tithe is routed to the governance module.
+    event CampaignClosedWithTithe(bytes32 indexed campaignUid, address indexed recipient, uint256 grossBounty, uint256 titheAmount, uint256 netRecipientAmount, uint256 medianScore);
+    /// @notice Emitted when a campaign is closed via the abstain-only quorum path.
+    event CampaignClosedByAbstain(bytes32 indexed campaignUid, address indexed recipient, uint256 refund, uint256 fee, uint256 abstainCount);
     /// @notice Emitted when the funder cancels a timed-out campaign.
     event CampaignCancelled(bytes32 indexed campaignUid, address indexed funder, uint256 refund, uint256 fee);
     /// @notice Emitted when cancellation fees are retained by the insurance pool.
@@ -76,12 +90,16 @@ contract PilotEscrow is Ownable2Step, Pausable, ReentrancyGuard {
 
     constructor(
         address _registry,
+        address _consentManager,
+        address _titheManager,
         uint256 _requiredOracles,
         uint256 _scoreQuorumPct,
         uint256 _participationFloorPct,
         uint256 _campaignTimeoutBlocks
     ) Ownable(msg.sender) {
         require(_registry != address(0), "Zero registry");
+        require(_consentManager != address(0), "Zero consent manager");
+        require(_titheManager != address(0), "Zero tithe manager");
         require(_requiredOracles >= 1 && _requiredOracles <= MAX_SCORES, "Invalid REQUIRED_ORACLES");
         require(_scoreQuorumPct >= 1 && _scoreQuorumPct <= 100, "Invalid SCORE_QUORUM_PCT");
         require(
@@ -93,6 +111,8 @@ contract PilotEscrow is Ownable2Step, Pausable, ReentrancyGuard {
             "Invalid CAMPAIGN_TIMEOUT_BLOCKS"
         );
         registry = VenomRegistry(_registry);
+        consentManager = IConsentManager(_consentManager);
+        titheManager = ITitheManager(_titheManager);
         REQUIRED_ORACLES = _requiredOracles;
         SCORE_QUORUM_PCT = _scoreQuorumPct;
         PARTICIPATION_FLOOR_PCT = _participationFloorPct;
@@ -193,11 +213,58 @@ contract PilotEscrow is Ownable2Step, Pausable, ReentrancyGuard {
             }
         }
 
-        // 7. Pay funder-designated recipient.
-        (bool ok, ) = payable(campaign.recipient).call{value: campaign.bounty}("");
-        require(ok, "Transfer failed");
+        // 7. Pay funder-designated recipient with consent-aware tithing.
+        (uint256 rate, ) = consentManager.getEffectiveRate(campaign.recipient);
 
-        emit CampaignClosed(campaignUid, campaign.recipient, campaign.bounty, medianScore);
+        if (rate > 0) {
+            uint256 titheAmount = (campaign.bounty * rate) / 10000;
+            uint256 netAmount = campaign.bounty - titheAmount;
+
+            titheManager.distribute{value: campaign.bounty}(campaign.bounty, campaign.recipient);
+
+            emit CampaignClosedWithTithe(campaignUid, campaign.recipient, campaign.bounty, titheAmount, netAmount, medianScore);
+        } else {
+            (bool ok, ) = payable(campaign.recipient).call{value: campaign.bounty}("");
+            require(ok, "Transfer failed");
+
+            emit CampaignClosed(campaignUid, campaign.recipient, campaign.bounty, medianScore);
+        }
+    }
+
+    function closeAbstainCampaign(
+        bytes32 campaignUid,
+        uint8[] calldata abstainReasons,
+        bytes[] calldata abstainSignatures
+    ) external whenNotPaused nonReentrant {
+        Campaign storage campaign = campaigns[campaignUid];
+        require(abstainReasons.length <= MAX_SCORES, "Too many abstains");
+        require(abstainReasons.length >= REQUIRED_ORACLES, "Below absolute abstain floor");
+        require(!campaign.closed, "Campaign already closed");
+        require(campaign.recipient != address(0), "Campaign not funded");
+        require(abstainReasons.length == abstainSignatures.length, "Abstain length mismatch");
+
+        uint256 activeCount = registry.activeOracleCount();
+        require(activeCount > 0, "No active oracles");
+        require(abstainReasons.length <= activeCount, "Too many abstains");
+
+        address[] memory emptyScoreSigners = new address[](0);
+        uint256 validAbstainCount = _validateAbstainSigs(
+            campaignUid, abstainReasons, abstainSignatures, emptyScoreSigners, 0
+        );
+
+        require(validAbstainCount * 100 >= activeCount * PARTICIPATION_FLOOR_PCT, "Below participation floor");
+
+        campaign.closed = true;
+
+        uint256 fee = (campaign.bounty * CANCEL_FEE_BPS) / 10000;
+        uint256 refund = campaign.bounty - fee;
+        insurancePool += fee;
+
+        (bool ok, ) = payable(campaign.recipient).call{value: refund}("");
+        require(ok, "Refund failed");
+
+        if (fee > 0) emit InsurancePoolDeposit(fee, "abstain-close");
+        emit CampaignClosedByAbstain(campaignUid, campaign.recipient, refund, fee, validAbstainCount);
     }
 
     /// @notice After CAMPAIGN_TIMEOUT_BLOCKS, the original funder can reclaim bounty minus 1% insurance fee.

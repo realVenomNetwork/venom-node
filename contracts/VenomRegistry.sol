@@ -49,6 +49,8 @@ contract VenomRegistry is Ownable2Step, ReentrancyGuard {
 
     /// @notice Emitted when an operator registers with stake and a Libp2p multiaddr.
     event OracleRegistered(address indexed operator, uint256 stake, string multiaddr);
+    /// @notice Emitted when an active oracle updates its Libp2p multiaddr.
+    event OracleMultiaddrUpdated(address indexed operator, string newMultiaddr);
     /// @notice Emitted when PilotEscrow reports a deviation large enough to slash an oracle.
     event OracleSlashed(address indexed operator, uint256 amount, string reason);
     /// @notice Emitted when a deviation report does not change oracle state.
@@ -160,6 +162,16 @@ contract VenomRegistry is Ownable2Step, ReentrancyGuard {
         hasRegistered[msg.sender] = true;
         activeOraclesSet.add(msg.sender);
         emit OracleRegistered(msg.sender, msg.value, _multiaddr);
+    }
+
+    function updateMultiaddr(string calldata newMultiaddr) external {
+        Oracle storage o = oracles[msg.sender];
+        require(o.active, "Not an active oracle");
+        uint256 len = bytes(newMultiaddr).length;
+        require(len > 0 && len <= 256, "Invalid multiaddr length");
+
+        o.multiaddr = newMultiaddr;
+        emit OracleMultiaddrUpdated(msg.sender, newMultiaddr);
     }
 
     /// @notice Slash an oracle if its submitted score deviates too far from the median.

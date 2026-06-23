@@ -30,6 +30,12 @@ function buildDeploymentArtifact(params) {
         constructorArguments: params.registryArtifactArguments,
         deploymentTxHash: params.venomRegistryTxHash,
       },
+      ConsentManager: {
+        address: params.consentManagerAddress,
+      },
+      TitheManager: {
+        address: params.titheManagerAddress,
+      },
       PilotEscrow: {
         address: params.pilotEscrowAddress,
         constructorArguments: params.escrowConstructorArguments,

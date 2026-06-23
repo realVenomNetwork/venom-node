@@ -13,9 +13,18 @@ async function deployRegistry(args = PRODUCTION_REGISTRY_ARGS) {
   return Registry.deploy(...args);
 }
 
+async function deployGovernance() {
+  const ConsentManager = await ethers.getContractFactory("ConsentManager");
+  const TitheManager = await ethers.getContractFactory("TitheManager");
+  const consent = await ConsentManager.deploy();
+  const tithe = await TitheManager.deploy();
+  return { consent, tithe };
+}
+
 async function deployEscrow(registry, args = PRODUCTION_ESCROW_ARGS) {
+  const gov = await deployGovernance();
   const Escrow = await ethers.getContractFactory("PilotEscrow");
-  return Escrow.deploy(await registry.getAddress(), ...args);
+  return Escrow.deploy(await registry.getAddress(), await gov.consent.getAddress(), await gov.tithe.getAddress(), ...args);
 }
 
 async function signEip712Score(signers, campaignUid, scores, escrowContract) {
@@ -85,14 +94,15 @@ describe("Configurable deployment constants", function () {
     const registry = await deployRegistry();
     const Escrow = await ethers.getContractFactory("PilotEscrow");
     const registryAddress = await registry.getAddress();
+    const gov = await deployGovernance();
 
-    await expect(Escrow.deploy(registryAddress, 0, 50, 67, 7200))
+    await expect(Escrow.deploy(registryAddress, await gov.consent.getAddress(), await gov.tithe.getAddress(), 0, 50, 67, 7200))
       .to.be.revertedWith("Invalid REQUIRED_ORACLES");
-    await expect(Escrow.deploy(registryAddress, 5, 0, 67, 7200))
+    await expect(Escrow.deploy(registryAddress, await gov.consent.getAddress(), await gov.tithe.getAddress(), 5, 0, 67, 7200))
       .to.be.revertedWith("Invalid SCORE_QUORUM_PCT");
-    await expect(Escrow.deploy(registryAddress, 5, 50, 49, 7200))
+    await expect(Escrow.deploy(registryAddress, await gov.consent.getAddress(), await gov.tithe.getAddress(), 5, 50, 49, 7200))
       .to.be.revertedWith("Invalid PARTICIPATION_FLOOR_PCT");
-    await expect(Escrow.deploy(registryAddress, 5, 50, 67, 99))
+    await expect(Escrow.deploy(registryAddress, await gov.consent.getAddress(), await gov.tithe.getAddress(), 5, 50, 67, 99))
       .to.be.revertedWith("Invalid CAMPAIGN_TIMEOUT_BLOCKS");
   });
 

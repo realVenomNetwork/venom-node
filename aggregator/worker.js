@@ -10,6 +10,8 @@ const { publishSignature, publishAbstain } = require('./p2p');
 const TEST_PAYLOAD = require('../data/fixtures/good-payload.json');
 const { assertRuntimeModeConfig } = require('../src/config/runtime-mode');
 const { recordDashboardEvent } = require('../src/dashboard/quorum-replay');
+const { recordMLLatency, recordWorkerJob } = require('../src/observability/metrics');
+const logger = require('../src/observability/logger');
 
 const rootEnvPath = path.join(__dirname, "../.env");
 require("dotenv").config({ path: rootEnvPath, quiet: true });
@@ -249,10 +251,10 @@ async function retryPendingDeliveries() {
         if (await publishPendingDelivery(campaignUid, delivery)) {
           await markCampaignProcessed(campaignUid);
           await deletePendingDelivery(campaignUid);
-          console.log(`[Worker] Re-published pending delivery for ${campaignUid}`);
+          logger.info(`[Worker] Re-published pending delivery for ${campaignUid}`);
         }
       } catch (error) {
-        console.warn(`[Worker] Pending delivery retry failed for ${campaignUid}: ${error.message}`);
+        logger.warn(`[Worker] Pending delivery retry failed for ${campaignUid}: ${error.message}`);
       }
     }
   } while (cursor !== "0");
@@ -357,7 +359,7 @@ async function fetchFromIpfs(cid) {
 
   for (let i = 0; i < results.length; i++) {
     if (results[i].status === 'fulfilled' && results[i].value) {
-      console.log(`[Worker] Successfully fetched from ${results[i].value.gateway}`);
+      logger.info(`[Worker] Successfully fetched from ${results[i].value.gateway}`);
       return results[i].value.data;
     }
   }
@@ -394,9 +396,10 @@ async function scoreWithFastAPI(evalData) {
       throw new Error(`ML service returned ${res.status}`);
     }
 
-    console.log(`[Worker] ML service responded in ${Date.now() - startTime}ms`);
+    logger.info(`[Worker] ML service responded in ${Date.now() - startTime}ms`);
 
     const result = await res.json();
+    recordMLLatency(Date.now() - startTime);
     if (typeof result.final_score !== "number" || typeof result.passes_threshold !== "boolean") {
       throw new Error("Invalid ML service response");
     }
@@ -437,7 +440,7 @@ async function publishSignedAbstain(campaignUid, reason) {
     reasonCode,
     message: `This node produced a signed abstain: ${reason}.`
   }).catch((error) => {
-    console.warn(`[Dashboard] Failed to record local abstain: ${error.message}`);
+    logger.warn(`[Dashboard] Failed to record local abstain: ${error.message}`);
   });
   await setPendingDelivery(campaignUid, {
     type: "abstain",
@@ -467,7 +470,7 @@ async function publishSignedScore(campaignUid, scoreInt) {
     score: scoreInt,
     message: `This node produced a signed score: ${scoreInt}.`
   }).catch((error) => {
-    console.warn(`[Dashboard] Failed to record local score: ${error.message}`);
+    logger.warn(`[Dashboard] Failed to record local score: ${error.message}`);
   });
   await setPendingDelivery(campaignUid, {
     type: "score",
@@ -481,7 +484,7 @@ async function processCampaign(job) {
   assertTestPayloadAllowed();
   const { campaignUid, cid, contentHash } = job.data;
   const { multiProvider, pilotEscrowAddress } = getWorkerRuntime();
-  console.log(`[Worker] Processing ${campaignUid}`);
+  logger.info(`[Worker] Processing ${campaignUid}`);
 
   if (!/^(0x)?[0-9a-fA-F]{64}$/.test(campaignUid)) {
     throw new Error(`Invalid campaignUid format: ${campaignUid}`);
@@ -493,24 +496,25 @@ async function processCampaign(job) {
 
   try {
     if (await hasProcessedCampaign(campaignUid)) {
-      console.log(`  -> Already processed by this operator: ${campaignUid}`);
+      logger.info(`  -> Already processed by this operator: ${campaignUid}`);
       return;
     }
 
     const campaign = await pilotEscrow.campaigns(campaignUid);
     if (campaign.closed) {
-      console.log(`  -> Already closed: ${campaignUid}`);
+      logger.info(`  -> Already closed: ${campaignUid}`);
       return;
     }
 
     let evalData;
     if (process.env.USE_TEST_PAYLOAD === "true") {
-      console.warn(`[Worker] Using test payload for ${campaignUid}; replace with real content fetch`);
+      logger.warn(`[Worker] Using test payload for ${campaignUid}; replace with real content fetch`);
       evalData = TEST_PAYLOAD;
     } else if (!cid) {
-      console.log(`  -> Missing payload CID. Publishing signed abstain.`);
+      logger.info(`  -> Missing payload CID. Publishing signed abstain.`);
       await publishSignedAbstain(campaignUid, "MissingPayload");
       await markCampaignProcessedAndClearDelivery(campaignUid);
+      recordWorkerJob('abstain_missing');
       return;
     } else {
       try {
@@ -520,9 +524,10 @@ async function processCampaign(job) {
         if (contentHash && contentHash !== ethers.ZeroHash) {
           const computedHash = computeContentHash(evalData.payload);
           if (computedHash.toLowerCase() !== contentHash.toLowerCase()) {
-            console.log(`  -> Content hash mismatch (expected ${contentHash}, got ${computedHash}). Publishing signed abstain.`);
+            logger.info(`  -> Content hash mismatch (expected ${contentHash}, got ${computedHash}). Publishing signed abstain.`);
             await publishSignedAbstain(campaignUid, "HashMismatch");
             await markCampaignProcessedAndClearDelivery(campaignUid);
+            recordWorkerJob('abstain_hash_mismatch');
             return;
           }
         }
@@ -530,9 +535,10 @@ async function processCampaign(job) {
         const reason = ["Timeout", "PayloadTooLarge", "FetchFailed", "NotFound", "HashMismatch"].includes(error.message)
           ? error.message
           : "FetchFailed";
-        console.log(`  -> Fetch failed (${reason}). Publishing signed abstain.`);
+        logger.info(`  -> Fetch failed (${reason}). Publishing signed abstain.`);
         await publishSignedAbstain(campaignUid, reason);
         await markCampaignProcessedAndClearDelivery(campaignUid);
+        recordWorkerJob('abstain_fetch_failed');
         return;
       }
     }
@@ -543,31 +549,39 @@ async function processCampaign(job) {
     try {
       scoreResult = await scoreWithFastAPIWithRetry(evalData);
     } catch (error) {
-      console.log(`  -> ML service failed (${error.message}). Publishing signed abstain.`);
+      logger.info(`  -> ML service failed (${error.message}). Publishing signed abstain.`);
       await publishSignedAbstain(campaignUid, "MLServiceFailed");
       await markCampaignProcessedAndClearDelivery(campaignUid);
+      recordWorkerJob('abstain_ml_failed');
       return;
     }
 
     if (!scoreResult.passes_threshold) {
-      console.log(`  -> Below threshold (score ${scoreResult.final_score}). Publishing signed abstain.`);
+      logger.info(`  -> Below threshold (score ${scoreResult.final_score}). Publishing signed abstain.`);
       await publishSignedAbstain(campaignUid, "BelowThreshold");
       await markCampaignProcessedAndClearDelivery(campaignUid);
+      recordWorkerJob('abstain_below_threshold');
       return;
     }
 
     const scoreInt = Math.floor(scoreResult.final_score * 100);
     if (!Number.isInteger(scoreInt) || scoreInt < SCORE_MIN || scoreInt > SCORE_MAX) {
-      console.warn(`  -> ML score out of range (${scoreResult.final_score}). Publishing signed abstain.`);
+      logger.warn(`  -> ML score out of range (${scoreResult.final_score}). Publishing signed abstain.`);
       await publishSignedAbstain(campaignUid, "MLServiceFailed");
       await markCampaignProcessedAndClearDelivery(campaignUid);
       return;
     }
-    await publishSignedScore(campaignUid, scoreInt);
+    const injectedScore = process.env.VENOM_TEST_INJECT_SCORE;
+    const publishScore = injectedScore ? parseInt(injectedScore, 10) : scoreInt;
+    if (injectedScore) {
+      logger.warn(`  -> VENOM_TEST_INJECT_SCORE active: publishing ${publishScore} instead of computed ${scoreInt}`);
+    }
+    await publishSignedScore(campaignUid, publishScore);
     await markCampaignProcessedAndClearDelivery(campaignUid);
-    console.log(`  -> Evaluated and signed score ${scoreInt} for ${campaignUid}`);
+    recordWorkerJob('success');
+    logger.info(`  -> Evaluated and signed score ${publishScore} for ${campaignUid}`);
   } catch (err) {
-    console.error(`Failed: ${campaignUid}`, err.message);
+    logger.error(`Failed: ${campaignUid}`, err.message);
     throw err;
   }
 }
@@ -594,17 +608,17 @@ async function startWorker() {
     lockRenewalTime: Math.max(1000, Math.floor(JOB_LOCK_DURATION_MS / 2))
   });
 
-  console.log("Starting VENOM Worker v1.1.0 (BullMQ + signed abstention + IPFS concurrent fallback)");
-  console.log(`   Address: ${wallet.address} | Queue: ${QUEUE_NAME}${OPERATOR_QUEUE_SUFFIX ? ` | Queue suffix: ${OPERATOR_QUEUE_SUFFIX}` : ""}`);
-  console.log(`   Concurrency: ${WORKER_CONCURRENCY} | Gateways: ${IPFS_GATEWAYS.length} | ML: ${ML_SERVICE_URL} | Job lock: ${JOB_LOCK_DURATION_MS}ms\n`);
+  logger.info("Starting VENOM Worker v1.1.0 (BullMQ + signed abstention + IPFS concurrent fallback)");
+  logger.info(`   Address: ${wallet.address} | Queue: ${QUEUE_NAME}${OPERATOR_QUEUE_SUFFIX ? ` | Queue suffix: ${OPERATOR_QUEUE_SUFFIX}` : ""}`);
+  logger.info(`   Concurrency: ${WORKER_CONCURRENCY} | Gateways: ${IPFS_GATEWAYS.length} | ML: ${ML_SERVICE_URL} | Job lock: ${JOB_LOCK_DURATION_MS}ms\n`);
 
-  worker.on('failed', (job, err) => console.error(`Job ${job.id} failed:`, err.message));
+  worker.on('failed', (job, err) => logger.error(`Job ${job.id} failed:`, err.message));
   return worker;
 }
 
 if (require.main === module) {
   startWorker().catch((error) => {
-    console.error(error);
+    logger.error(error);
     process.exit(1);
   });
 }

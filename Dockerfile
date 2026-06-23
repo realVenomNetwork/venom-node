@@ -14,7 +14,7 @@ COPY --chown=node:node data/ ./data/
 COPY --chown=node:node dashboard/ ./dashboard/
 COPY --chown=node:node cli/ ./cli/
 COPY --chown=node:node vocabulary/ ./vocabulary/
-RUN mkdir -p /app/.venom-artifacts && chown -R node:node /app/.venom-artifacts
+RUN mkdir -p /app/.venom-artifacts /app/.venom && chown -R node:node /app/.venom-artifacts /app/.venom
 USER node
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

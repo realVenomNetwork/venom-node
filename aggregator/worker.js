@@ -310,12 +310,19 @@ async function fetchFromIpfs(cid) {
 
   const results = await Promise.allSettled(
     IPFS_GATEWAYS.map(async (gateway) => {
-      const url = `${gateway}/${normalizedCid}`;
+      const url = gateway.endsWith('/ipfs')
+        ? `${gateway}/${normalizedCid}`
+        : `${gateway}/ipfs/${normalizedCid}`;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), IPFS_GATEWAY_TIMEOUT);
 
       try {
-        const response = await fetch(url, { signal: controller.signal });
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            "User-Agent": "VENOM-Node/1.1.0 (https://venom.network)"
+          }
+        });
 
         if (!response.ok) {
           failures.push({ gateway, status: response.status, reason: response.status === 404 ? "NotFound" : "FetchFailed" });

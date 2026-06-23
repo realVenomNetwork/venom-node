@@ -226,7 +226,12 @@ async function startP2PNode(wallet) {
       identify: identify(),
       pubsub: gossipsub({
         allowPublishToZeroPeers: true,
-        emitSelf: true
+        emitSelf: true,
+        D: 2,
+        Dlo: 1,
+        Dhi: 4,
+        Dlazy: 2,
+        gossipFactor: 0.25
       })
     }
   };
@@ -265,13 +270,34 @@ async function startP2PNode(wallet) {
       console.warn(`[P2P] Skipping malformed bootstrap peer: ${peer}`);
       continue;
     }
-    try {
-      await libp2p.dial(multiaddr(addr));
-      console.log(`[P2P] Bootstrap dialed ${peer}`);
-    } catch (err) {
-      console.warn(`[P2P] Bootstrap dial failed for ${peer}: ${err.message}`);
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        await libp2p.dial(multiaddr(addr));
+        console.log(`[P2P] Bootstrap dialed ${peer}`);
+        break;
+      } catch (err) {
+        if (attempt < 5) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+          console.warn(`[P2P] Bootstrap dial ${peer} failed (attempt ${attempt}/5), retry in ${delay}ms: ${err.message}`);
+          await new Promise(r => setTimeout(r, delay));
+        } else {
+          console.warn(`[P2P] Bootstrap dial ${peer} failed after 5 attempts: ${err.message}`);
+        }
+      }
     }
   }
+
+  libp2p.handle('/venom-relay/1.0.0', async ({ stream }) => {
+    try {
+      for await (const buf of stream.source) {
+        const bytes = buf instanceof Uint8Array ? buf : buf.subarray();
+        await handleSignatureMessage({ detail: { data: bytes } });
+      }
+    } finally {
+      try { await stream.close(); } catch {}
+    }
+  });
+  console.log('[P2P] Relay handler registered');
 
   leaderInterval = setInterval(checkAndSubmitIfLeader, 5000);
   oracleRefreshInterval = setInterval(() => {
@@ -298,6 +324,15 @@ async function startP2PNode(wallet) {
     libp2p = null;
     myPeerId = null;
   };
+
+  // Diagnostic: periodic peer connection status
+  const diagInterval = setInterval(() => {
+    if (!libp2p) { clearInterval(diagInterval); return; }
+    const conns = libp2p.getConnections ? libp2p.getConnections().length : 'N/A';
+    const subs = typeof libp2p.services.pubsub.getSubscribers === 'function'
+      ? libp2p.services.pubsub.getSubscribers(TOPIC).length : 'N/A';
+    console.log(`[P2P] Diag: connections=${conns} subscribers=${subs}`);
+  }, 60_000);
 
   console.log("[P2P] Node ready (v1.1 signed abstention + closeCampaign ABI)");
   return libp2p;
@@ -469,12 +504,16 @@ function amILeader(campaignUid, scoreSigners, round = 0) {
 
 function quorumMet(entry) {
   const scoreCount = entry.signers.length;
-  const totalCount = scoreCount + entry.abstainSigners.length;
-  return (
-    scoreCount >= REQUIRED_ORACLES &&
-    scoreCount * 100 >= activeOracleCount * SCORE_QUORUM_PCT &&
-    totalCount * 100 >= activeOracleCount * PARTICIPATION_FLOOR_PCT
-  );
+  const abstainCount = entry.abstainSigners.length;
+  const totalCount = scoreCount + abstainCount;
+
+  if (totalCount * 100 < activeOracleCount * PARTICIPATION_FLOOR_PCT) return false;
+
+  if (scoreCount >= REQUIRED_ORACLES && scoreCount * 100 >= activeOracleCount * SCORE_QUORUM_PCT) return true;
+
+  if (totalCount >= activeOracleCount) return true;
+
+  return false;
 }
 
 function medianScore(scores) {
@@ -735,6 +774,25 @@ async function publishSignature(campaignUid, score, signature) {
     timestamp: Date.now()
   };
   await libp2p.services.pubsub.publish(TOPIC, new TextEncoder().encode(JSON.stringify(message)));
+  relayToPeers(message).catch(err => console.warn(`[P2P-Relay] Relay error: ${err.message}`));
+}
+
+async function relayToPeers(message) {
+  if (!libp2p) return;
+  const encoded = new TextEncoder().encode(JSON.stringify(message));
+  const seen = new Set();
+  for (const conn of libp2p.getConnections()) {
+    const peerId = conn.remotePeer.toString();
+    if (seen.has(peerId)) continue;
+    seen.add(peerId);
+    try {
+      const stream = await conn.newStream('/venom-relay/1.0.0', { negotiateFully: false });
+      await stream.sink([encoded]);
+      await stream.close();
+    } catch (err) {
+      console.warn(`[P2P-Relay] Failed to relay to ${peerId}: ${err.message}`);
+    }
+  }
 }
 
 async function publishAbstain(campaignUid, reasonCode, signature, reasonLabel = "") {
@@ -751,6 +809,7 @@ async function publishAbstain(campaignUid, reasonCode, signature, reasonLabel = 
     timestamp: Date.now()
   };
   await libp2p.services.pubsub.publish(TOPIC, new TextEncoder().encode(JSON.stringify(message)));
+  relayToPeers(message).catch(err => console.warn(`[P2P-Relay] Relay error: ${err.message}`));
 }
 
 async function checkAndSubmitIfLeader() {
@@ -771,7 +830,8 @@ async function checkAndSubmitIfLeader() {
     if (elapsed < LEADER_TIMEOUT_MS) continue;
 
     const round = Math.floor(elapsed / LEADER_TIMEOUT_MS);
-    const currentLeader = leaderForRound(campaignUid, entry.signers, round);
+    const signerPool = entry.signers.length > 0 ? entry.signers : entry.abstainSigners;
+    const currentLeader = leaderForRound(campaignUid, signerPool, round);
     if (currentLeader !== myAddress) continue;
 
     console.log(`[P2P] Fallback leader round ${round} for ${campaignUid}`);

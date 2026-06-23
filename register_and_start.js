@@ -220,6 +220,9 @@ async function main() {
     }
   }
 
+  // Give gossipsub mesh time to converge before workers publish signatures
+  await new Promise(r => setTimeout(r, 15000));
+
   console.log("\nStarting Producer, Worker, and P2P mesh...");
   producerHandle = await startProducer();
   workerHandle = await startWorker();

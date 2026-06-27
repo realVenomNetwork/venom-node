@@ -23,12 +23,13 @@ This is the first live test of the slashing path. All 9 external model analyses 
 
 ### 1. Modify `scripts/pilot/slashing-scenario.js`
 
-The current script hardcodes `targetIndex = 3` (4th operator, 0-indexed) and requires `operators.length < 4`. For a 3-operator canary, apply these changes:
+The current script hardcodes `targetIndex = 3` (4th operator, 0-indexed) and requires `operators.length < 4`. For a 3-operator canary, these three bugs have been fixed:
 
-- Line 172: `if (operators.length < 4)` → `if (operators.length < 3)`
-- Line 222: `const targetIndex = 3;` → `const targetIndex = 2;`
+1. **Minimum operator guard** (line 172): now uses `targetIndex + 1` dynamically — pass `--target-index 2` for 3 ops
+2. **Target index** (line 222): reads from `--target-index` flag, defaults to `operators.length - 1`
+3. **Slash percent verification** (line 282): reads `SLASH_PERCENT` from deployment artifact dynamically instead of hardcoding 5%
 
-Alternatively, make `targetIndex` configurable via `--target-index` flag. The 3rd operator (index 2) will receive the injected deviating score.
+The 3rd operator (index 2) receives the injected deviating score via `VENOM_TEST_INJECT_SCORE`.
 
 ### 2. Deploy contracts with `canary-05` profile
 
@@ -87,8 +88,10 @@ Verify each registers on-chain (check `activeOracleCount` = 3).
 
 ### Step 3 — Run slashing scenario
 
+The script uses bare `node register_and_start.js` processes (not Docker Compose) so operator networking differs from the Docker-based plan above. Ensure all env vars (`RPC_URLS`, `IPFS_GATEWAYS`, etc.) are set in each operator's `.env` before running.
+
 ```bash
-node scripts/pilot/slashing-scenario.js --profile=canary-05 --deviation=30
+node scripts/pilot/slashing-scenario.js --profile=canary-05 --deviation=30 --target-index=2
 ```
 
 The script:
@@ -98,6 +101,8 @@ The script:
 4. The aggregator detects deviation > MAX_DEVIATION (20), calls `reportDeviation`
 5. `VenomRegistry.slashOperator()` fires `OracleSlashed` with 10% of stake
 6. Operator 3 is deactivated
+
+**Note on ML median drift:** If the ML service produces a median different from ~70, the injected score of 100 may produce a deviation below the threshold. To guarantee trigger, pass `--deviation 30` (injected = 100, any median ≤ 79 yields deviation ≥ 21, which exceeds MAX_DEVIATION=20). For additional safety, verify the ML model's typical output for the test payload before the run.
 
 ### Step 4 — Verify on-chain
 
@@ -163,7 +168,7 @@ docker compose --project-name canary-05 logs --tail=200 > docs/canary-05-logs.tx
 | Campaign bounty | 0.005 |
 | Gas (deploy + fund + close + unstake) | ~0.025 |
 | **Total** | **~0.33** |
-| Recoverable (3 × 0.10 - 0.01 slashed = 0.29) | 0.29 |
+| Recoverable (3 × 0.10 - 0.01 slashed - ~0.003 finalization gas) | ~0.287 |
 
 ---
 

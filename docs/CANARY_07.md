@@ -77,7 +77,14 @@ All 5 operators score an IPFS-hosted payload, gossip signed scores, detect quoru
    docker compose --project-name canary-07 -f docker-compose.canary-07.yml up -d --build
    ```
 
-2. Fund a campaign with a real IPFS CID and correct content hash:
+2. Verify content hash before funding (avoids the hash-mismatch bug from C04/C06):
+   ```javascript
+   const payload = require('./data/fixtures/good-payload.json');
+   const hash = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(payload.payload)));
+   // hash should match the content hash you pass to fundCampaign
+   ```
+
+3. Fund a campaign with a real IPFS CID and correct content hash:
    ```bash
    node scripts/fund-campaign.mjs \
      --cid QmcnVkumNjD9L8FSjhLTDoUYnudJ8AdSS8kJVqquEwkcpq \
@@ -85,7 +92,7 @@ All 5 operators score an IPFS-hosted payload, gossip signed scores, detect quoru
      --content-hash 0x0d73f10ecca170228c02cd0020bdaa2bd11ffc3932d7ec53de19afe6532bbcd3
    ```
 
-3. Start all 5 operators:
+4. Start all 5 operators:
    ```bash
    for i in $(seq 1 5); do
      node register_and_start.js --env .venom-canary-07/operator-$i/.env &
@@ -118,20 +125,21 @@ After all 5 scores are gossiped but before the elected leader submits on-chain, 
 ### Steps
 
 1. Fund and start as in Scenario A.
-2. From operator logs, identify the elected leader:
+2. From operator logs, identify the elected leader **immediately when scores reach 5/5**:
    ```
    Quorum reached (round 0 leader: 0x...)
    ```
-3. Kill the leader process (SIGKILL, not SIGTERM):
+   Do **not** wait for the `Submitting closeCampaign` log — by then the tx may already be in the mempool.
+3. Kill the leader process within 2-5 seconds of the quorum log (SIGKILL, not SIGTERM):
    ```bash
    kill -9 <leader-pid>
    ```
-4. Wait. The remaining 4 operators should:
+4. Wait (~30-60s). The remaining 4 operators should:
    - Detect leader absence (no `closeCampaign` tx within expected window)
    - Increment round
    - New leader elected for round 1
    - New leader submits `closeCampaign`
-5. Verify on-chain close succeeds.
+5. Verify on-chain close succeeds. Confirm the `closeCampaign` tx sender is **not** the killed leader's address.
 
 ### Expected Behavior
 
@@ -149,13 +157,15 @@ One operator is configured with unreachable IPFS gateways. It should abstain wit
 
 ### Steps
 
-1. Before starting the cluster, modify operator-3's `.env`:
+1. Before starting the cluster, modify operator-3's `.env` with a **single** unreachable gateway:
    ```env
    IPFS_GATEWAYS=https://192.0.2.1/ipfs
    IPFS_GATEWAY_TIMEOUT=2000
    FETCH_TIMEOUT_MS=3000
    ```
-   (192.0.2.1 is a reserved "TEST-NET" address guaranteed unreachable)
+   (192.0.2.1 is reserved "TEST-NET", guaranteed unreachable). Verify with `curl --connect-timeout 2 https://192.0.2.1/ipfs/QmTest`.
+   
+   **Critical:** Use only one gateway entry (no commas). If multiple gateways are present and one is real, operator-3 may bypass the test and fetch successfully, making the abstention not trigger.
 
 2. Start all 5 operators.
 3. Fund a campaign with a real IPFS CID (as in Scenario A).
@@ -192,7 +202,7 @@ Fund a campaign but start only 1 operator (not enough for quorum). After `CAMPAI
    ```
 3. Start only operator-1.
 4. Do not fund additional operators. The campaign will never reach quorum.
-5. Wait for `CAMPAIGN_TIMEOUT_BLOCKS` (~12 hours at 12s Base Sepolia blocks). Alternatively, use a local Hardhat fork to speed this up with `evm_increaseTime`.
+5. Wait for `CAMPAIGN_TIMEOUT_BLOCKS` (~2 hours at 2s Base Sepolia blocks). Alternatively, use a local Hardhat fork to speed this up with `evm_increaseTime`.
 6. Call `cancelCampaign`:
    ```javascript
    await escrow.cancelCampaign(campaignUid);
@@ -229,5 +239,5 @@ Run Canary 07 on or after July 7, 2026:
 
 - **Leader failover not triggered:** If `closeCampaign` succeeds before kill lands, retry with tighter timing or kill earlier (before quorum log)
 - **IPFS gateway fallback:** If operator-3's bogus gateway times out but falls through to a real gateway in IPFS_GATEWAYS list, the abstention won't trigger — use a single fake gateway
-- **cancelCampaign timeout:** 3600 blocks ≈ 12 hours on Base Sepolia → schedule this scenario to run overnight or test on Hardhat fork first
+- **cancelCampaign timeout:** 3600 blocks ≈ 2 hours on Base Sepolia → can run same-day rather than overnight
 - **Budget insufficient pre-July 4:** Defer to post-recovery; do not run C07 with < 0.75 ETH

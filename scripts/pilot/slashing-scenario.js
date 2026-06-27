@@ -24,10 +24,11 @@ const VENOM_REGISTRY_ABI = [
 ];
 
 function parseArgs(argv) {
-  const args = { profile: "canary-05", deviation: 30, campaignUid: null };
+  const args = { profile: "canary-05", deviation: 30, targetIndex: null, campaignUid: null };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--profile" && i + 1 < argv.length) args.profile = argv[++i];
     if (argv[i] === "--deviation" && i + 1 < argv.length) args.deviation = parseInt(argv[++i], 10);
+    if (argv[i] === "--target-index" && i + 1 < argv.length) args.targetIndex = parseInt(argv[++i], 10);
     if (argv[i] === "--campaign-uid" && i + 1 < argv.length) args.campaignUid = argv[++i];
   }
   return args;
@@ -169,8 +170,9 @@ async function main() {
   const baseDir = `.venom-${args.profile}`;
   const operators = discoverOperatorEnvs(baseDir);
 
-  if (operators.length < 4) {
-    throw new Error(`Need at least 4 operators, found ${operators.length}`);
+  const minOperators = (args.targetIndex !== null ? args.targetIndex : 2) + 1;
+  if (operators.length < minOperators) {
+    throw new Error(`Need at least ${minOperators} operators, found ${operators.length}`);
   }
   log(`Discovered ${operators.length} operators`);
   operators.forEach(op => log(`  ${op.id}: ${op.address}`));
@@ -219,7 +221,7 @@ async function main() {
   const campaign = await escrow.campaigns(campaignUid);
   log(`Campaign bounty: ${ethers.formatEther(campaign.bounty)} ETH`);
 
-  const targetIndex = 3;
+  const targetIndex = args.targetIndex !== null ? args.targetIndex : operators.length - 1;
   const medianScore = 70;
   const injectedScore = medianScore + args.deviation;
   log(`Target operator: ${operators[targetIndex].id} (index ${targetIndex})`);
@@ -279,7 +281,8 @@ async function main() {
   log(`Slash amount: ${ethers.formatEther(slashAmount)} ETH`);
   log(`Slash percent: ${slashPercent}%`);
 
-  const expectedSlash = (targetBefore * 5n) / 100n;
+  const slashPct = BigInt(artifact.profile?.constants?.SLASH_PERCENT || 5);
+  const expectedSlash = (targetBefore * slashPct) / 100n;
   const tolerance = expectedSlash / 100n;
   const success = slashAmount >= expectedSlash - tolerance && slashAmount <= expectedSlash + tolerance;
 

@@ -75,6 +75,16 @@ const PROFILES = Object.freeze({
     maxDeviation: 25,
     bootstrapDiscovery: true,
   }),
+  'canary-07': Object.freeze({
+    requiredOracles: 5,
+    scoreQuorumPct: 50,
+    participationFloorPct: 67,
+    campaignTimeoutBlocks: 3600,
+    minStakeEth: '0.15',
+    slashPercent: 5,
+    maxDeviation: 25,
+    bootstrapDiscovery: true,
+  }),
   solo: Object.freeze({
     requiredOracles: 1,
     scoreQuorumPct: 50,
